@@ -14,6 +14,7 @@ _Moscow Institute of Technology, spring 2022. Lecturer [Alexander Stanovoy](http
 
 ## General information
 
+- Rust version: 1.59.0
 - [Course syllabus](docs/syllabus.md)
 - [Workspace setup instruction](docs/setup.md)
 - [How to code and send tasks to CI?](docs/solving.md)
