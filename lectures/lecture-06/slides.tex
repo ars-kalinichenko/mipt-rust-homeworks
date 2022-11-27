@@ -1,0 +1,1874 @@
+\documentclass[aspectratio=1610,t]{beamer}
+
+\usepackage[english]{babel}
+\usepackage{hyperref}
+\usepackage{minted}
+\usepackage{alltt}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[utf-8]{inputenc}
+
+\usetheme{metropolis}
+\usemintedstyle{xcode}
+\definecolor{codebg}{RGB}{247, 247, 246}
+\setbeamercolor{background canvas}{bg=white}
+\hypersetup{colorlinks,linkcolor=,urlcolor=orange}
+
+\title{Lecture 6: System safety}
+\date{April 26, 2022}
+\author{Alexander Stanovoy}
+\institute{alex.stanovoy@gmail.com}
+
+\begin{document}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}
+\maketitle
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{In this lecture}
+\begin{itemize}
+    \item Lifetimes
+    \item Lifetime elision
+    \item Higher-Rank Trait Bounds
+    \item Subtyping
+    \item Variance
+    \item Drop checker
+    \item Conclusion
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Lifetimes}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{A word about Rust in general}
+Every language has its main aims. They affect how the language is developed, its priorities, and define the weak and strong sides.
+
+Rust is not an exception. The three main aims of Rust are:
+
+\begin{itemize}
+    \item \textbf{Performance}: Fast and memory efficient.
+    \item \textbf{Reliability} (or safety): Safe and don't let us even compile unsafe code.
+    \item \textbf{Productivity}: Overall speed of development. It's about community, documentation, and tooling.
+\end{itemize}
+
+Today, we're going to discuss the Rust's type system, its weak and strong sides, and how it's connected with the \textbf{performance} and \textbf{safety}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{A word about Rust in general}
+To be safe, Rust should guarantee that there's no (it's not a comprehensive list):
+
+\begin{itemize}
+    \item Double free.
+    \item Null pointer dereference.
+    \item Aliasing.
+    \item Invalid memory access.
+    \item Use after free.
+    \item Data races.
+\end{itemize}
+
+Fixing double frees is quite easy - even when you write C++ code you likely won't do such a silly mistake because of RAII.
+
+To deal with null pointers, we should either check them or never create them.
+
+But what about the others?
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Aliasing}
+As you already know, compilers want to optimize the code, and we want it to be correct at the same time. You should already know about \textbf{aliasing} from the previous courses.
+
+Because two of the aims of Rust are \textbf{performance} and \textbf{productivity}, we want the language to give as much space to make code fast and readable as possible.
+
+So why should we care about aliasing?
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Aliasing}
+Consider this simple function:
+
+\begin{minted}{rust}
+    fn compute(input: &u32, output: &mut u32) {
+        if *input > 10 {
+            *output = 1;
+        }
+        if *input > 5 {
+            *output *= 2;
+        }
+        // remember that `output` will be `2` if `input > 10`
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Aliasing}
+Our compiler would like to be able to optimize it to the following function:
+
+\begin{minted}{rust}
+    fn compute(input: &u32, output: &mut u32) {
+        // keep `*input` in a register
+        let cached_input = *input;
+        if cached_input > 10 {
+            *output = 2;
+        } else if cached_input > 5 {
+            *output *= 2;
+        }
+    }
+\end{minted}
+
+For almost any other language, this optimization is not sound. This is because the optimization relies on knowing that aliasing doesn't occur.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Aliasing}
+Rust's borrow checker just checks whether we have one \textit{mutable} OR multiple \textit{shared} references. This rule is named \textit{aliasing XOR mutability}, or \textit{AXM} in research papers.
+
+Therefore we know this input should be impossible because \texttt{\&mut} isn't allowed to be aliased.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Aliasing}
+This is why alias analysis is important: it lets the compiler perform useful optimizations! Some examples:
+
+\begin{itemize}
+    \item Keeping values in registers by proving no pointers access the value's memory.
+    \item Eliminating reads by proving some memory hasn't been written to since last we read it.
+    \item Eliminating writes by proving some memory is never read before the next write to it.
+    \item Moving or reordering reads and writes by proving they don't depend on each other.
+\end{itemize}
+
+Even more: aliasing is unsafe and could lead to unsound code, and Rust forbids it.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{A word about Rust in general}
+Although we know about AXM and have already written some Rust code, we don't know how it works in depth!
+
+As you might already know, any type system rejects some of the wrong programs and at the same time rejects some of the normal ones.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{A word about Rust in general}
+The main problems we're facing are:
+
+\begin{itemize}
+    \item Invalid memory access.
+    \item Use after free.
+\end{itemize}
+
+\visible<2->{
+    \textbf{Question}: How does Rust decides when the references and the variables go out of scope?
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes}
+Rust enforces ownership rules through \textit{lifetimes}. Informelly, lifetime is \textbf{a named region of code}.
+
+The core idea is to limit the lifetimes of references by giving them a special type that includes not only the type of reference, but the region where this reference is valid too!
+
+Actually, lifetimes are not just \textit{scope} since the lifetime of the variable can branch or even have holes!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes}
+Lifetimes are denoted by the leading quote and usually with just a one symbol name: \texttt{'a}, \texttt{'b}, \texttt{'static}. The lifetimes are written before other generic parameters.
+
+\begin{minted}{rust}
+    pub struct Person<'a, T> {
+        pub first_name: &'a str,
+        pub last_name: &'a str,
+        pub age: usize,
+        pub private_property: T,
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes}
+Note that lifetimes are not types, \textbf{but the part of the type} and \textbf{behave like a type}. They are erased after the borrow check and used only to check ownership rules.
+
+In local scopes, you usually don't need to specify lifetimes: here, Rust lifetime inference works as good as type inference.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes}
+Let's desugar the lifetimes at this simple example!
+
+\begin{minted}[fontsize=\small]{rust}
+    let x = 0;
+    let y = &x;
+    let z = &y;
+\end{minted}
+
+\begin{minted}[fontsize=\small]{rust}
+    // Note: `'a: {` and `&'b x` is not a valid syntax!
+    'a: {
+        // 'x' has the lifetime 'a
+        let x: i32 = 0;
+        'b: {
+            //
+            let y: &'b i32 = &'b x;
+            'c: {
+                let z: &'c &'b i32 = &'c y;
+            }
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes}
+The second example:
+
+\begin{minted}{rust}
+    let x = 0;
+    let z;
+    let y = &x;
+    z = y;
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes}
+Desugared:
+
+\begin{minted}{rust}
+    'a: {
+        let x: i32 = 0;
+        'b: {
+            let z: &'b i32;
+            'c: {
+                // Must use 'b here because this reference is
+                // being passed to that scope.
+                let y: &'b i32 = &'b x;
+                z = y;
+            }
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Lifetimes}
+Let's find a mistake using lifetimes in the third example:
+
+\begin{minted}[fontsize=\small]{rust}
+    fn as_str(data: &u32) -> &str {
+        let s = format!("{}", data);
+        &s
+    }
+\end{minted}
+
+Desugared:
+
+\begin{minted}[fontsize=\small]{rust}
+    fn as_str<'a>(data: &'a u32) -> &'a str {
+        'b: {
+            let s = format!("{}", data);
+            return &'a s;
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Lifetimes}
+And the fourth example. How the compiler will see the error?
+
+\begin{minted}[fontsize=\small]{rust}
+    let mut data = vec![1, 2, 3];
+    let x = &data[0];
+    data.push(4);
+    println!("{}", x);
+\end{minted}
+
+Desugared:
+
+\begin{minted}[fontsize=\small]{rust}
+    'a: {
+        let mut data: Vec<i32> = vec![1, 2, 3];
+        'b: {
+            let x: &'b i32 = Index::index::<'b>(&'b data, 0);
+            'c: {
+                Vec::push(&'c mut data, 4);
+            }
+            println!("{}", x);
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes}
+Lifetimes can be more difficult than just a scope:
+
+\begin{minted}[fontsize=\small]{rust}
+    let mut data = vec![1, 2, 3];
+    let x = &data[0];  // 'x' is defined
+    if some_condition() {
+        // This is the last use of 'x' in this branch
+        println!("{}", x);
+        data.push(4);
+    } else {
+        // There's no use of 'x' in here, so effectively the last use is the
+        // creation of x at the top of the example.
+        data.push(5);
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes}
+...And have holes:
+
+\begin{minted}[fontsize=\small]{rust}
+    let mut data = vec![1, 2, 3];
+    // This mut allows us to change where the reference points to
+    let mut x = &data[0];
+    // Last use of this borrow
+    println!("{}", x);
+
+    data.push(4);
+    // We start a new borrow here
+    x = &data[3];
+    println!("{}", x);
+\end{minted}
+
+\visible<2->{
+    After these examples, we can also conclude: \texttt{let} statement creates a new lifetime.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes}
+Unfortunately, borrow checker is not ideal; it can forbid code that should've compile:
+
+\begin{minted}[fontsize=\small]{rust}
+    fn get_default<K, V>(map: &mut HashMap<K, V>, key: K) -> &mut V
+    where
+        K: Clone + Eq + Hash,
+        V: Default,
+    {
+        match map.get_mut(&key) {
+            Some(value) => value,
+            None => {
+                map.insert(key.clone(), V::default());
+                map.get_mut(&key).unwrap()
+            }
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Lifetimes}
+\begin{minted}[fontsize=\small]{rust}
+error[E0499]: cannot borrow `*map` as mutable more than once at a time
+  --> src/main.rs:12:13
+...
+9  |       match map.get_mut(&key) {
+   |       -     ----------------- first mutable borrow occurs here
+   |  _____|
+   | |
+11 | |         None => {
+12 | |             map.insert(key.clone(), V::default());
+   | |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ second
+   | |                               mutable borrow occurs here
+...
+15 | |     }
+   | |_____- returning this value requires that `*map`
+   |         is borrowed for `'1`
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetime elision}
+As you already seen, Rust don't require from you to type the lifetimes every single time. This property is called a \textit{lifetime elision}.
+
+\visible<2->{
+    Lifetime positions can appear as either ``input''or ``output''.
+}
+
+\begin{itemize}
+    \item<3-> For \texttt{fn} definitions, \texttt{fn} types, and the traits \texttt{Fn}, \texttt{FnMut}, and \texttt{FnOnce}, input refers to the types of the formal arguments, while output refers to result types, so that
+    
+    \begin{minted}{rust}
+    fn foo(s: &str) -> (&str, &str)
+    \end{minted}
+
+    Has elided one lifetime in input position and two lifetimes in output position.
+
+    \item<4-> For \texttt{impl}'s, all types are input, so that
+    
+    \begin{minted}{rust}
+    impl Trait<&T> for Struct<&T>
+    \end{minted}
+
+    Has elided two lifetimes in input position, while
+    
+    \begin{minted}{rust}
+    impl Struct<&T>
+    \end{minted}
+    
+    Has elided one.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetime elision}
+Elision rules are as follows:
+
+\begin{itemize}
+    \item Each \textbf{elided} lifetime in input position becomes a distinct lifetime parameter.
+    
+    \begin{minted}[fontsize=\small]{rust}
+    fn print(s: &str);
+    fn print<'a>(s: &'a str);
+
+    fn debug(lvl: usize, s: &str);
+    fn debug<'a>(lvl: usize, s: &'a str);
+
+    fn compare_strs(s: &str, t: &str) -> bool;
+    fn compare_strs<'a, 'b>(s: &'a str, t: &'b str) -> bool;
+
+    fn get_user_data_from<'a>(user: &'a User,
+        server: &Server) -> Data;
+    fn get_user_data_from<'a, 'b>(user: &'a User,
+        server: &'b Server) -> Data;
+    \end{minted}
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetime elision}
+Elision rules are as follows:
+
+\begin{itemize}
+    \item Each \textbf{elided} lifetime in input position becomes a distinct lifetime parameter.
+    \item If there is \textbf{exactly} one input lifetime position (elided or not), that lifetime is assigned to all elided output lifetimes.
+    
+    \begin{minted}{rust}
+    fn substr(s: &str, until: usize) -> &str;
+    fn substr<'a>(s: &'a str, until: usize) -> &'a str;
+
+    // This won't work!
+    fn frob(s: &str, t: &str) -> &str;
+    \end{minted}
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetime elision}
+Elision rules are as follows:
+
+\begin{itemize}
+    \item Each \textbf{elided} lifetime in input position becomes a distinct lifetime parameter.
+    \item If there is \textbf{exactly} one input lifetime position (elided or not), that lifetime is assigned to all elided output lifetimes.
+    \item If there are multiple input lifetime positions, but one of them is \texttt{\&self} or \texttt{\&mut self}, the lifetime of \texttt{self} is assigned to all elided output lifetimes.
+    
+    \begin{minted}[fontsize=\small]{rust}
+    fn get_mut(&mut self) -> &mut T;
+    fn get_mut<'a>(&'a mut self) -> &'a mut T;
+
+    fn args<T: ToString>(&mut self, args: &[T])
+        -> &mut Command;
+    fn args<'a, 'b, T: ToString>(&'a mut self, args: &'b [T])
+        -> &'a mut Command;
+    \end{minted}
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetime elision}
+Elision rules are as follows:
+
+\begin{itemize}
+    \item Each \textbf{elided} lifetime in input position becomes a distinct lifetime parameter.
+    \item If there is \textbf{exactly} one input lifetime position (elided or not), that lifetime is assigned to all elided output lifetimes.
+    \item If there are multiple input lifetime positions, but one of them is \texttt{\&self} or \texttt{\&mut self}, the lifetime of \texttt{self} is assigned to all elided output lifetimes.
+    \item Otherwise, it is an error to elide an output lifetime!
+    
+    \begin{minted}{rust}
+    // This won't work!
+    fn get_str() -> &str; 
+    \end{minted}
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetime elision}
+You can also use wildcard to elide lifetime and let Rust decide automatically what do you need:
+
+\begin{minted}{rust}
+    fn get_iter(buf: &[u8]) -> std::slice::Iter<'_, u8>;
+    fn get_iter<'a>(buf: &'a [u8]) -> std::slice::Iter<'a, u8>;
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes and possible mistakes}
+It's possible to write a compiling program that's in the same time is not semantically correct. Let's write an iterator over byte slice:
+
+\begin{minted}[fontsize=\small]{rust}
+    struct ByteIter<'a> {
+        remainder: &'a [u8]
+    }
+    impl<'a> ByteIter<'a> {
+        fn next(&mut self) -> Option<&u8> {
+            if self.remainder.is_empty() {
+                None
+            } else {
+                let byte = &self.remainder[0];
+                self.remainder = &self.remainder[1..];
+                Some(byte)
+            }
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes and possible mistakes}
+This code will work just fine:
+
+\begin{minted}{rust}
+    let mut bytes = ByteIter { remainder: b"1" };
+    assert_eq!(Some(&b'1'), bytes.next());
+    assert_eq!(None, bytes.next());
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes and possible mistakes}
+But what about a bit different example?
+
+\begin{minted}{rust}
+    let mut bytes = ByteIter { remainder: b"1123" };
+    let byte_1 = bytes.next();
+    let byte_2 = bytes.next();
+    if byte_1 == byte_2 { ... }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes and possible mistakes}
+\textit{Nooo, Rust, why!}
+
+\begin{minted}[fontsize=\small]{rust}
+error[E0499]: cannot borrow `bytes` as mutable more
+              than once at a time
+  --> src/main.rs:20:18
+   |
+19 |     let byte_1 = bytes.next();
+   |                  ----- first mutable borrow occurs here
+20 |     let byte_2 = bytes.next();
+   |                  ^^^^^ second mutable borrow occurs here
+21 |     if byte_1 == byte_2 {
+   |        ------ first borrow later used here
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes and possible mistakes}
+What I'll tell you that the problem lies in our lifetimes? First, we need to desugar our \texttt{ByteIter} using the rules of lifetime elision:
+
+\begin{minted}[fontsize=\small]{rust}
+    struct ByteIter<'a> {
+        remainder: &'a [u8]
+    }
+    impl<'a> ByteIter<'a> {
+        fn next(&mut self) -> Option<&u8> {
+            if self.remainder.is_empty() {
+                None
+            } else {
+                let byte = &self.remainder[0];
+                self.remainder = &self.remainder[1..];
+                Some(byte)
+            }
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes and possible mistakes}
+What I'll tell you that the problem lies in our lifetimes? First, we need to desugar our \texttt{ByteIter} using the rules of lifetime elision:
+
+\begin{minted}[fontsize=\small]{rust}
+    struct ByteIter<'remainder> {
+        remainder: &'remainder [u8]
+    }
+    impl<'remainder> ByteIter<'remainder> {
+        fn next<'rself>(&'rself mut self) -> Option<&'rself u8> {
+            if self.remainder.is_empty() {
+                None
+            } else {
+                let byte = &self.remainder[0];
+                self.remainder = &self.remainder[1..];
+                Some(byte)
+            }
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes and possible mistakes}
+Rust thinks that our \texttt{Option} returns the link to the \texttt{ByteIter}, not to the \texttt{remainder}, so because we have a link to the \texttt{\&mut ByteIter} we cannot call \texttt{next} one more time, since it will violate the AXM rule.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes and possible mistakes}
+We need to fix that by using the correct lifetime.
+
+\begin{minted}[fontsize=\small]{rust}
+    struct ByteIter<'remainder> {
+        remainder: &'remainder [u8]
+    }
+    impl<'remainder> ByteIter<'remainder> {
+        fn next(&mut self) -> Option<&'remainder u8> {
+            if self.remainder.is_empty() {
+                None
+            } else {
+                let byte = &self.remainder[0];
+                self.remainder = &self.remainder[1..];
+                Some(byte)
+            }
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lifetimes and possible mistakes}
+But why Rust compiled the first case?
+
+\visible<2->{
+    Because it's correct with respect to the type system, and that implies we do not produce undefined behaviour and memory unsafety, so our program is safe.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Higher-Rank Trait Bounds}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Higher-Rank Trait Bounds (HRTBs)}
+Let's reimplement \texttt{.filter()} of \texttt{Option}. What we want is to return a \texttt{Some(T)} when the value satisfies some predicate and \texttt{None} otherwise.
+
+This function accepts some function that takes a reference to a \texttt{T} and returns a reference \textit{to inside that} \texttt{T}:
+
+\begin{minted}[fontsize=\small]{rust}
+    fn filter<F>(self, f: F) -> Option<T>
+    where
+        F: FnOnce(&T) -> bool
+    {
+        if let Some(value) = self {
+            if f(&value) {
+                return Some(value)
+            }
+        }
+        None
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Higher-Rank Trait Bounds (HRTBs)}
+This will compile. But we are learning lifetimes here, right? Let's desugar it:
+
+\begin{minted}[fontsize=\small]{rust}
+    impl<T> Option<T> {
+        fn filter<F>(self, f: F) -> Option<T>
+        where
+            F: FnOnce(&'??? T) -> bool
+        {
+            'b: {
+                if let Some(value) = self {
+                    // 'b is a local lifetime of 'value'
+                    if f(&'b value) {
+                        return Some(value)
+                    }
+                }
+            }
+            None
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Higher-Rank Trait Bounds (HRTBs)}
+How are we supposed to express the lifetimes on \texttt{F}'s trait bound? We need to provide some lifetime there, but the lifetime we care about can't be named until we enter the body of \texttt{filter}!
+
+\textbf{Question}: Why not just write \texttt{'a} to the function signature?
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Higher-Rank Trait Bounds (HRTBs)}
+\begin{minted}[fontsize=\small]{rust}
+    impl<T> Option<T> {
+        fn filter<'a, F>(self, f: F) -> Option<T>
+        where
+            F: FnOnce(&'a T) -> bool
+        {
+            'b: {
+                if let Some(value) = self {
+                    // 'b is a local lifetime of 'value'
+                    if f(&'b value) {
+                        return Some(value)
+                    }
+                }
+            }
+            None
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Higher-Rank Trait Bounds (HRTBs)}
+\begin{minted}{rust}
+error[E0309]: the parameter type `T` may not live long enough
+  --> src/main.rs:29:12
+   |
+26 | impl<T> Option<T> {
+   |      - help: consider adding an explicit
+   |              lifetime bound...: `T: 'a`
+...
+29 |         F: FnOnce(&'a T) -> bool
+   |            ^^^^^^^^^^^^^^^^^^^^^ ...so that the reference
+   |                                  type `&'a T` does not
+   |                                  outlive the data it points at
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Higher-Rank Trait Bounds (HRTBs)}
+\begin{minted}[fontsize=\small]{rust}
+    impl<T> Option<T> {
+        fn filter<'a, F>(self, f: F) -> Option<T>
+        where
+            T: 'a,
+            F: FnOnce(&'a T) -> bool
+        {
+            'b: {
+                if let Some(value) = self {
+                    // 'b is a local lifetime of 'value'
+                    if f(&'b value) {
+                        return Some(value)
+                    }
+                }
+            }
+            None
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Higher-Rank Trait Bounds (HRTBs)}
+\begin{minted}{rust}
+error[E0597]: `value` does not live long enough
+--> src/main.rs:33:18
+   |
+27 |     fn filter<'a, F>(self, f: F) -> Option<T>
+   |               -- lifetime `'a` defined here
+...
+33 |             if f(&value) {
+   |                --^^^^^^-
+   |                | |
+   |                | borrowed value does not live long enough
+   |                argument requires that `value` is borrowed
+   |                for `'a`
+...
+36 |         }
+   |         - `value` dropped here while still borrowed
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Higher-Rank Trait Bounds (HRTBs)}
+\textbf{Remember}: lifetimes in function signatures strictly longer than the lifetime of any local variable in this function. In this case, \texttt{'a} would be a local lifetime!
+
+\visible<2->{
+    Function signature lifetimes specify what Rust expects from caller's variables to verify this function is safe and what's the lifetime of the return value to verify the caller will handle the output correctly.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Higher-Rank Trait Bounds (HRTBs)}
+This is the strong side of Rust: syntax explains what function do, and community strive to write readable code.
+
+\visible<2->{
+    Moreover, as we'll see today, it's not just an idiom that the community follows - matching function signature is sufficient condition to declare it's usage safe!
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Higher-Rank Trait Bounds (HRTBs)}
+This is how this problem is solved:
+
+\begin{minted}[fontsize=\small]{rust}
+    impl<T> Option<T> {
+        fn filter<F>(self, f: F) -> Option<T>
+        where
+            F: for<'a> FnOnce(&'a T) -> bool
+        {
+            if let Some(value) = self {
+                if f(&value) {
+                    return Some(value)
+                }
+            }
+            None
+        }
+    }
+\end{minted}
+
+This syntax is called \textit{higher-rank trait bound (HRTB)}: we are generic over the whole spectrum of lifetimes!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Higher-Rank Trait Bounds (HRTBs)}
+Most of time, you won't need HRTBs: our example will compile without it since compiler will add HRTB for us.
+
+Currently, there're only 3 places in standard library with HRTBs!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{T}, \texttt{\&T} and \texttt{\&mut T}}
+It's a common mistake to think that, for instance, \texttt{T} is always an owning type, so we need to understand what means \texttt{T}, \texttt{\&T} and \texttt{\&mut T} when we write generics. Let's create a table to understand.
+
+Suppose we write the following in our code:
+
+\begin{minted}{rust}
+    impl<T> Trait for T {}
+    impl<T> Trait for &T {}
+    impl<T> Trait for &mut T {}
+\end{minted}
+
+This types will match on the following \texttt{impl}'s:
+
+\begin{table}[]
+\begin{tabular}{|p{45mm}|p{25mm}|p{55mm}|}
+\hline
+\texttt{T} & \texttt{\&T} & \texttt{\&mut T} \\ \hline
+\texttt{i32}, \texttt{\&i32}, \texttt{\&mut i32}, \texttt{\&\&i32}, \texttt{\&mut \&mut i32} & \texttt{\&i32}, \texttt{\&\&i32}, \texttt{\&\&mut i32} & \texttt{\&mut i32}, \texttt{\&mut \&mut i32}, \texttt{\&mut \&i32} \\ \hline
+\end{tabular}
+\end{table}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{T}, \texttt{\&T} and \texttt{\&mut T}}
+Conclusions:
+
+\begin{itemize}
+    \item \texttt{T} is the superset of \texttt{\&T} and \texttt{\&mut T}.
+    \item \texttt{\&T} and \texttt{\&mut T} are disjoint sets.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Unbounded lifetime}
+Sometimes you'll need an \textit{unbounded lifetime}, the lifetime that is bigger than any other lifetime. It's definition is \texttt{'static}. For instance:
+
+\begin{minted}{rust}
+    let static_str: &'static str = "Hello world!";
+\end{minted}
+
+The \texttt{'static} lifetime is basically the definition of lifetime of the whole program. 
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{T: 'a} and \texttt{\&'a T}}
+Sometimes, you'll see the lifetimes for \textit{types}:
+
+\begin{minted}{rust}
+    impl<'a> MyTrait for MyType
+    where
+        Self: 'a,
+    {
+        /* ... */
+    }
+\end{minted}
+
+This means: ``the type is constrained by the lifetime \texttt{'a}'', i.e \textbf{all lifetime parameters} of \texttt{T} outlive \texttt{'a}.
+
+Let's understand what it means.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{T: 'a} and \texttt{\&'a T}}
+Take a look at this simple example: since our \texttt{Ref<'a>} cannot outlive the reference inside it, it satisfies \texttt{Self: 'a}. But when we try to require \texttt{'static} from it, we find out our \texttt{Ref} cannot live more then \texttt{'a}!
+
+\begin{minted}{rust}
+    trait RequireLifetime<'a> where Self: 'a {}
+    struct Ref<'a> {
+        r: &'a i32,
+    }
+
+    impl<'a> RequireLifetime<'a> for Ref<'a> {}
+
+    // lifetime bound not satisfied!
+    // impl<'a> RequireLifetime<'static> for Ref<'a> {}
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{T: 'a} and \texttt{\&'a T}}
+Look: the same applies to \texttt{Vec<T>}. We don't have explicit \texttt{'a} bound among its generics, but it's limited by the lifetime constraits of \texttt{T}.
+
+\begin{minted}{rust}
+    trait RequireLifetime<'a> where Self: 'a {}
+
+    impl<'a> RequireLifetime<'a> for Vec<&'a i32> {}
+
+    // lifetime bound not satisfied!
+    // impl<'a> RequireLifetime<'static> for Vec<&'a i32> {}
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{T: 'a} and \texttt{\&'a T}}
+Even if we'll have multiple lifetimes and generic types in the structure, it will be constrained by the most strict of constraints:
+
+\begin{minted}{rust}
+    struct Holder<'a, 'b, T, U> {
+        s: &'a str,
+        t: T,
+        u: U,
+        ur: &'b U,
+    }
+\end{minted}
+
+Here, \texttt{T} and \texttt{U} also have some lifetime, namely \texttt{'t} and \texttt{'u}, and compiler will choose the strictest of \texttt{'a}, \texttt{'b}, \texttt{'t} and \texttt{'u}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{T: 'a} and \texttt{\&'a T}}
+\textbf{Question}: What means \texttt{T: 'static}?
+
+\begin{itemize}
+    \item<2-> \texttt{T} doesn't have \textbf{any} lifetime constraints, and you can store it for as long as you want. For instance, any owning type such as \texttt{i32}, \texttt{Vec<String>}, \texttt{Range<usize>} or even \texttt{static VALUE: &str = "hello"} could be stored as much time as you want.
+    \item<3-> But you're not supposed to drop them exactly at the end of the program, of course! This means only that there's no lifetime constraints.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{T: 'a} and \texttt{\&'a T}}
+More generally:
+
+\begin{itemize}
+    \item<1-> \texttt{T: 'a} is a set of all types that are bounded by the lifetime \texttt{'a}.
+    \item<2-> The set of possible \texttt{T: 'a} includes \texttt{\&'a T}.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Subtyping}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Subtyping}
+Although Rust doesn't have any notion of structural inheritance, it does include subtyping. 
+
+Informelly, \textbf{subtyping} is a concept used to show that \textit{one object is at least as useful as another}. Here, \texttt{Cat} \texttt{Dog} are subtypes of \texttt{Animal}, and \texttt{Animal} is their supertype.
+
+\begin{minted}[fontsize=\small]{rust}
+    trait Animal {
+        fn snuggle(&self);
+    }
+    trait Cat: Animal {
+        fn meow(&self);
+    }
+    trait Dog: Animal {
+        fn bark(&self);
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Subtyping}
+The following will work because of subtyping:
+
+\begin{minted}{rust}
+    fn love(pet: &dyn Animal) {
+        pet.snuggle();
+    }
+
+    struct SomeCat;
+    impl Animal for SomeCat { ... }
+    impl Cat for SomeCat { ... }
+
+    let cat = SomeCat;
+    love(&cat);
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Subtyping}
+Moreover, subtyping also works with lifetimes!
+
+\begin{minted}{rust}
+    fn shortest<'a>(a: &'a str, b: &'a str) -> &'a str {
+        if a.len() < b.len() { a } else { b }
+    }
+
+    let a = "hello";
+    let b = String::from("students");
+    println!("{}", shortest(a, b.as_str()));
+\end{minted}
+
+Remember that lifetimes behave like types and they are related to subtyping. Even more: they are the main reason the subtyping exists in Rust!
+
+\textbf{Question}: \texttt{'static} vs some \texttt{'a} - where's the subtype?
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{'a: 'b}}
+We can also require from lifetime to \textbf{not strictly} outlive another lifetime
+
+How this code works?
+
+\begin{minted}{rust}
+    fn foo<'a, 'b: 'a>(one: &'b str, two: &'a str) -> &'a str {
+        one
+    }
+
+    fn main() {
+        let string_one = "foo".to_string();
+        {
+            let string_two = "bar".to_string();
+            println!("{}", foo(&string_one, &string_two));
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Variance}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance}
+Let's try to answer the following questions:
+
+\begin{itemize}
+    \item<1-> Is \texttt{\&'static T} is a subtype of \texttt{\&'a T}? \visible<2->{\textbf{Yes.}}
+    \item<3-> Is \texttt{\&'a T} is a subtype of \texttt{\&'a U} when \texttt{T} is a subtype of \texttt{U}? \visible<4->{\textbf{Yes.}}
+    \item<5-> Is \texttt{\&'static mut T} is a subtype of \texttt{\&'a mut T}? \visible<6->{\textbf{Yes.}}
+    \item<7-> Is \texttt{\&'a mut T} is a subtype of \texttt{\&'a mut U} when \texttt{T} is a subtype of \texttt{U}? \visible<8->{\textbf{No.}}
+    
+    \visible<9->{It may seem non-intuitive, but imagine if a function will take a \texttt{\&mut Vec<\&'a str>}, and you provide it with a \texttt{\&mut Vec<\&'static str>}. Then you'll be able to put a short-lived reference to \texttt{Vec}!}
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Variance}
+Example:
+
+\begin{minted}[fontsize=\small]{rust}
+    fn invariant<'a>(vec: &mut Vec<&'a str>, s: &'a str) {
+        vec.push(s)
+    }
+
+    // Good to go!
+    let s = String::from("some &'a str");
+    let mut vec = vec![];
+    invariant(&mut vec, s.as_str());
+
+    // And this code won't compile!
+    let mut vec = vec!["some &'static str"];
+    {
+        let s = String::from("some &'a str");
+        invariant(&mut vec, s.as_str());
+    }
+    println!("{vec:?}");  // It's necessary!
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance}
+Actually, there's a name to this phenomenon: \textbf{variance}, and all types have it. It defines what other \textit{similar} types can be used in that type's place.
+
+There are three kinds of variance: \textit{covariant}, \textit{invariant}, and \textit{contravariant}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Covariance}
+A type is \textbf{covariant} if you can use a \textbf{subtype} in place of the type. It's the most common type of variance.
+
+For instance, \texttt{\&'a T} \textbf{is covariant in} \texttt{'a}. \texttt{\&'a T} \textbf{is also covariant in} \texttt{T}, so you can pass a \texttt{\&Vec<\&'static str>} to a function that takes \texttt{\&Vec<\&'a str>}.
+
+\begin{minted}{rust}
+    fn covariant(x: &dyn Cat) { ... }
+
+    covariant(&domestic_cat);
+    covariant(&cat);
+    // Won't compile!
+    // covariant(&animal);
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Invariance}
+A type is \textbf{invariant} when you must provide \textit{exactly} the given type. Without subtyping, all types would have been invariant!
+
+The main example of invariance is \texttt{\&'a mut T}. It is \textit{covariant} in \texttt{'a} and \textbf{invariant} in \texttt{T}.
+
+\begin{minted}[fontsize=\small]{rust}
+    // An example just as above, just shortened
+    fn invariant<'a>(vec: &mut Vec<&'a str>, s: &'a str) {
+        vec.push(s)
+    }
+
+    // Won't compile!
+    let mut vec = vec!["some &'static str"];
+    {
+        let s = String::from("some &'a str");
+        invariant(&mut vec, s.as_str());
+    }
+    println!("{vec:?}");
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Contravariance}
+A type is \textbf{contravariant} if you can use \textbf{supertype} in the place of the type. The only source of contravariance in the language is the arguments to a function!
+
+In simple terms, \texttt{fn(T) -> U} is \textbf{contravariant} in \texttt{T}, i.e you can use any supertype in place of \texttt{T}, and \textit{covariant} in \texttt{U}.
+
+\begin{minted}[fontsize=\small]{rust}
+    fn contravariant(f: fn(&'static str)) {}
+
+    fn f1(s1: &'static str) {}
+    fn f2<'a>(s1: &'a str) {}
+
+    contravariant(f1);
+    contravariant(f2);
+
+    // In contrast:
+    // &'static str <: &'a str
+    // fn(&'a str) <: &'static str
+\end{minted}
+% TODO: fix examples of variance above
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance}
+Actually, there's a table with variances of fundamental types, and everything derives from it. You can find it \href{https://doc.rust-lang.org/reference/subtyping.html#variance}{The Rust Reference}.
+
+\begin{table}[]
+\begin{tabular}{|l|l|l|}
+\hline
+Type                                 & Variance in \texttt{'a} & Variance in \texttt{T} \\ \hline
+\texttt{\&'a T}                      & covariant               & covariant              \\ \hline
+\texttt{\&'a mut T}                  & covariant               & invariant              \\ \hline
+\texttt{*const T}                    &                         & covariant              \\ \hline
+\texttt{*mut T}                      &                         & invariant              \\ \hline
+\texttt{[T]} and \texttt{[T; n]}     &                         & covariant              \\ \hline
+\texttt{fn() -> T}                   &                         & covariant              \\ \hline
+\texttt{fn(T) -> ()}                 &                         & contravariant          \\ \hline
+\texttt{fn(T) -> T}                  &                         & invariant              \\ \hline
+\texttt{std::cell::UnsafeCell<T>}    &                         & invariant              \\ \hline
+\texttt{std::marker::PhantomData<T>} &                         & covariant              \\ \hline
+\texttt{dyn Trait<T> + 'a}           & covariant               & invariant              \\ \hline
+\end{tabular}
+\end{table}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance}
+\textbf{Control question}: What's the variance of this type?
+
+\begin{minted}{rust}
+    &'a (dyn Trait<'b> + 'c)
+\end{minted}
+
+\begin{itemize}
+    \item<2-> Covariant in \texttt{'a}.
+    \item<3-> Invariant in \texttt{'b}.
+    \item<4-> Covariant in \texttt{'c}.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance}
+Do you remember that actually \texttt{dyn Trait} is a type erasure? It must be a mistake to erase the lifeteime!
+
+\begin{minted}{rust}
+    let s = my_string.as_str();
+    let b: Box<dyn Trait> = Box::new(s);
+    return b;  // Ooops!
+\end{minted}
+
+That's the reason why \texttt{dyn Trait + 'a} have a lifetime associated with it!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance}
+\textbf{Question}: Why this code does not compile?
+
+\begin{minted}{rust}
+    fn evil_feeder<T>(input: &mut T, val: T) {
+        *input = val;
+    }
+
+    fn main() {
+        let mut mr_snuggles: &'static str = "meow! :3";
+        {
+            let spike = String::from("bark! >:V");
+            let spike_str: &str = spike.as_str();
+            evil_feeder(&mut mr_snuggles, spike_str);
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance}
+Desugared:
+
+\begin{minted}{rust}
+    fn evil_feeder<'a>(input: &mut &'a str, val: &'a str) {
+        *input = val;
+    }
+
+    fn main() {
+        let mut mr_snuggles: &'static str = "meow! :3";
+        {
+            let spike = String::from("bark! >:V");
+            let spike_str: &str = spike.as_str();
+            evil_feeder(&mut mr_snuggles, spike_str);
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance}
+\textbf{Question}: How often do you actually need variance?
+
+\visible<2->{
+    Getting variance right matters for soundness. But you should not need to think about it at all if you are not writing \texttt{unsafe}: it is solely compiler's job until \texttt{unsafe} gets involved.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance and \texttt{unsafe}}
+We need to find out why variance is important for \texttt{unsafe}, so we'll implement our \texttt{Cell}.
+
+\begin{minted}[fontsize=\small]{rust}
+    struct MyCell<T> {
+        value: T
+    }
+    impl<T: Copy> MyCell<T> {
+        fn set(&self, new_value: T) {
+            // pub unsafe fn write<T>(dst: *mut T, src: T)
+            unsafe {
+                std::ptr::write(
+                    &self.value as *const T as *mut T,
+                    new_value
+                );
+            }
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance and \texttt{unsafe}}
+\textbf{Question}: What's the output of this code?
+
+\begin{minted}[fontsize=\small]{rust}
+    fn foo(rcell: &MyCell<&i32>) { 
+        let val: i32 = 13;
+        rcell.set(&val);
+        println!("foo set value: {}", rcell.value);
+    }
+
+    fn main() {
+        static X: i32 = 10;
+        let cell = MyCell { value: &X };
+        foo(&cell);
+        println!("end value: {}", cell.value);
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance and \texttt{unsafe}}
+\textbf{Question}: What's the output of this code?
+
+\begin{minted}[fontsize=\small]{rust}
+    fn foo(rcell: &MyCell<&i32>) { 
+        let val: i32 = 13;
+        rcell.set(&val);
+        println!("foo set value: {}", rcell.value);
+    }
+
+    fn main() {
+        static X: i32 = 10;
+        let cell = MyCell::new(&X);
+        foo(&cell);
+        println!("end value: {}", cell.value);
+    }
+\end{minted}
+
+\begin{verbatim}
+    foo set value: 13
+    end value: 32766  // possible output
+\end{verbatim}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance and \texttt{unsafe}}
+What happened?
+
+\begin{itemize}
+    \item<2-> We've stored a \texttt{\&'a i32} reference to the cell that can only store \texttt{\&'static i32} references!
+    \item<3-> By default, compiler won't let us write such code, but in this case \texttt{MyCell<T>} is covariant in \texttt{T}.
+    \item<4-> That resulted in \texttt{MyCell} having reference with too small lifetime inside it.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance and \texttt{unsafe}}
+Why this code does not compile?
+
+\begin{minted}[fontsize=\small]{rust}
+    struct MyCell<T> { value: T }
+    impl<T> MyCell<T> {
+        fn set(&mut self, value: T) { ... }
+    }
+
+    fn main() {
+        static X: i32 = 42;
+        let x: &'static i32 = &X;
+        let mut cell: MyCell<&'static i32> = MyCell { value: x };
+        {
+            let y = 228;
+            cell.set(&y);
+        }
+        drop(cell);
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance and \texttt{unsafe}}
+Desugared for \texttt{T=i32}:
+
+\begin{minted}[fontsize=\small]{rust}
+    struct MyCell<T> { value: T }
+    impl<T> MyCell<T> {
+        // fn set(&mut self, value: T) { ... }
+        fn set<'a, 'b>(s: &'a mut MyCell<&'a i32>, value: &'b i32) {
+            /* ... */
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance and \texttt{unsafe}}
+At the same time, this code won't compile!
+
+\begin{minted}{rust}
+    fn foo(rcell: &Cell<&i32>) { 
+        let val: i32 = 13;
+        rcell.set(&val);
+    }
+
+    fn main() {
+        static X: i32 = 10;
+        let cell = Cell::new(&X);
+        foo(&cell);
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance and \texttt{unsafe}}
+\begin{minted}[fontsize=\small]{rust}
+error[E0597]: `val` does not live long enough
+ --> src/main.rs:7:15
+  |
+5 | fn foo(rcell: &Cell<&i32>) {
+  |                     - let's call the lifetime of
+  |                       this reference `'1`
+6 |     let val: i32 = 13;
+7 |     rcell.set(&val);
+  |     ----------^^^^-
+  |     |         |
+  |     |         borrowed value does not live long enough
+  |     argument requires that `val` is borrowed for `'1`
+8 | }
+  | - `val` dropped here while still borrowed
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Variance and \texttt{unsafe}}
+Control question: why this code compiles?
+
+\begin{minted}[fontsize=\small]{rust}
+    struct MyCell<T> { value: T }
+    impl<T> MyCell<T> {
+        fn set(&self, value: T) { ... }
+    }
+
+    fn main() {
+        static X: i32 = 42;
+        let x: &'static i32 = &X;
+        let mut cell: MyCell<&'static i32> = MyCell { value: x };
+        {
+            let y = 228;
+            cell.set(&y);
+        }
+        drop(cell);
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Drop checker}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Drop checker}
+Like in C++, most of lime we exactly know the drop order of variables: it's reversed definition order.
+
+\begin{minted}[fontsize=\small]{rust}
+    let x;
+    let y;
+\end{minted}
+
+Desugared to scopes:
+
+\begin{minted}{rust}
+    {
+        let x; // drops second
+        {
+            let y; // drops first
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Drop checker}
+There are some more complex situations which are not possible to desugar using scopes, but the order is still defined ‒ variables are dropped in the reverse order of their definition, fields of structs and tuples in order of their definition.
+
+\begin{minted}{rust}
+    let tuple = (vec![], vec![]);
+\end{minted}
+
+\textbf{Question}: Whereas the left vector is dropped first, does it mean the right one strictly outlives it in the eyes of the borrow checker? \visible<2->{\textbf{No}.}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Drop checker}
+So why do we care? We care because if the type system isn't careful, it could accidentally make dangling pointers. Consider the following code. Will it compile? \visible<2->{\textbf{Yes}.}
+
+\begin{minted}[fontsize=\small]{rust}
+    struct Inspector<'a>(&'a u8);
+    struct World<'a> {
+        inspector: Option<Inspector<'a>>,
+        days: Box<u8>,
+    }
+    fn main() {
+        let mut world = World {
+            inspector: None,
+            days: Box::new(1),
+        };
+        world.inspector = Some(Inspector(&world.days));
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Drop checker}
+But what if we add a destructor?
+
+\begin{minted}[fontsize=\small]{rust}
+    struct Inspector<'a>(&'a u8);
+    impl<'a> Drop for Inspector<'a> {
+        fn drop(&mut self) {
+            println!("I was only {} days from retirement!", self.0);
+        }
+    }
+    struct World<'a> {
+        inspector: Option<Inspector<'a>>, days: Box<u8>
+    }
+    fn main() {
+        let mut world = World {
+            inspector: None,
+            days: Box::new(1),
+        };
+        world.inspector = Some(Inspector(&world.days));
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Drop checker}
+Let's say \texttt{days} happens to get dropped first. Then when \texttt{Inspector} is dropped, it will try to read free'd memory!
+
+\visible<2->{
+    Implementing \texttt{Drop} lets the \texttt{Inspector} execute some arbitrary code during its death. This means it can potentially observe that types that are supposed to live as long as it does actually were destroyed first.
+}
+
+\visible<3->{
+    Interestingly, only generic types need to worry about this. If they aren't generic, then the only lifetimes they can harbor are \texttt{'static}, which will truly live forever. This is why this problem is referred to as \textbf{sound generic drop}. Sound generic drop is enforced by the \textbf{drop checker}.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Drop checker}
+\textbf{Question}: What is the requirements for generic type to soundly implement drop?
+
+\visible<2->{\textbf{All} generic types' generics arguments must strictly outlive them.}
+
+\visible<3->{Up to this point we've only ever interacted with the outlives relationship in an inclusive manner. That is, when we talked about \texttt{'a: 'b}, it was ok for \texttt{'a} to live exactly as long as \texttt{'b}.}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Drop checker}
+Take a look: we \textbf{never} access data in \texttt{Drop}, but the code doesn't compile!
+
+\begin{minted}[fontsize=\small]{rust}
+    struct Inspector<'a>(&'a u8, &'static str);
+    impl<'a> Drop for Inspector<'a> {
+        fn drop(&mut self) {
+            println!("Inspector(_, {})", self.1);
+        }
+    }
+    struct World<'a> {
+        inspector: Option<Inspector<'a>>, days: Box<u8>,
+    }
+    fn main() {
+        let mut world = World {
+            inspector: None,
+            days: Box::new(1),
+        };
+        world.inspector = Some(Inspector(&world.days, "gadget"));
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Drop checker}
+And another example that doesn't compile even if we don't access data inside:
+
+\begin{minted}[fontsize=\small]{rust}
+    struct Inspector<T>(T, &'static str);
+    impl<T> Drop for Inspector<T> {
+        fn drop(&mut self) {
+            println!("Inspector(_, {})", self.1);
+        }
+    }
+    struct World<T> {
+        inspector: Option<Inspector<T>>, days: Box<u8>,
+    }
+    fn main() {
+        let mut world = World {
+            inspector: None,
+            days: Box::new(1),
+        };
+        world.inspector = Some(Inspector(&world.days, "gadget"));
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{PhantomData}}
+It appears that everything is good with this definition of \texttt{Vec}.
+
+\begin{minted}{rust}
+    struct Vec<T> {
+        data: *const T,
+        len: usize,
+        cap: usize,
+    }
+\end{minted}
+
+The drop checker will determine that \texttt{Vec<T>} does not own any values of type \texttt{T}. This will in turn make it conclude that it doesn't need to worry about \texttt{Vec} dropping any \texttt{T}'s in its destructor for determining drop check soundness. This will in turn allow people to create unsoundness using \texttt{Vec}'s destructor!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{PhantomData}}
+So, sometimes we want to simulate a field of the given type for the purpose of static analysis.
+
+In order to tell drop checker that we do own values of type \texttt{T}, and therefore may drop some \texttt{T}'s when we drop, we must add an extra \texttt{PhantomData} saying exactly that.
+
+\begin{minted}{rust}
+    struct Vec<T> {
+        data: *const T,
+        len: usize,
+        cap: usize,
+        _marker: marker::PhantomData<T>,
+    }
+\end{minted}
+
+\texttt{PhantomData} is ZST used to mark things that ``act like'' they own a \texttt{T}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Conclusion}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Conclusion}
+Let's summarize our new knowledge about Rust's type system.
+
+\begin{enumerate}
+    \item<2-> The core idea of system safety is to track object's lifetimes.
+    \item<3-> Lifetimes are nested, so we need only to track local scopes and generic definitions (formal proof can be found in papers).
+    \item<4-> Every generic definition includes different lifetimes and generic types.
+    \item<5-> By default, you have no lifetime parameters. They usually appear in references and mean ``I cannot outlive that lifetime''
+    \item<6-> Or in \texttt{PhantomData} when you want not to outlive some object.
+\end{enumerate}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Conclusion}
+\begin{enumerate}
+    \item<1-> Every function, structure and enumeration have a \textbf{set} of possible input parameters. For instance:
+    
+    \begin{minted}{rust}
+    fn example<'a, T, U>(t: T, u: U)
+    where
+        T: IntoIterator,
+        <T as IntoIterator>::IntoIter: Iterator<Item=U>,
+        U: Clone + 'a {}
+    \end{minted}
+
+    \item<2-> After that, we check whether our input types are correct. We do this with respect to the variance of this types.
+    \item<3-> It can be proved that it's enough to have a memory safe application!
+\end{enumerate}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Conclusion}
+\begin{enumerate}
+    \item<1-> When Rust checks \texttt{impl} blocks for intersection, it finds whether there's an intersections in these sets of possible input parameters.
+    \item<2-> It's appears that if we have a destructors, it's not enough to require just ``lives at least as'' realation. Instead, we have to \textit{strictly outlive} all of the type's parameters!
+    \item<3-> After all checks, Rust erases lifetimes: semantically, for different lifetimes you have different implementations, but in the stage of code generation compiler creates one implementation. So, the only purpose of lifetimes is to make strict type system that solves memory safety issues.
+    \item<4-> And the last: we've already discussed that Rust doesn't allow to coerse freely types (eg. \texttt{void*} to \texttt{int*} in C++).
+    \item<5-> Some coersions \href{https://doc.rust-lang.org/reference/type-coercions.html#coercion-types}{are allowed}, but this list is quite restrictive.
+\end{enumerate}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\end{document}

@@ -1,0 +1,12 @@
+toolchain: stable
+allowed-patterns:
+  - src/node.rs
+  - src/tree.rs
+steps:
+  linters:
+    - forbid-unsafe
+    - forbid-collections
+    - cargo-fmt
+    - cargo-clippy
+  testing:
+    - cargo-test

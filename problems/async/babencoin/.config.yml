@@ -1,0 +1,12 @@
+toolchain: stable
+allowed-patterns:
+  - src/node/gossip_service.rs
+  - src/node/mining_service.rs
+  - src/node/peer_service.rs
+steps:
+  linters:
+    - forbid-unsafe
+    - cargo-fmt
+    - cargo-clippy
+  testing:
+    - cargo-test-debug

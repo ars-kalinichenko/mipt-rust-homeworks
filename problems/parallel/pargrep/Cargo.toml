@@ -1,0 +1,11 @@
+[package]
+name = "pargrep"
+version = "0.1.0"
+authors = ["Sergei Fomin <sergio-dna@yandex.ru>"]
+edition = "2021"
+
+[dependencies]
+rayon = "1.5.2"
+
+[dev-dependencies]
+tempdir = "0.3"

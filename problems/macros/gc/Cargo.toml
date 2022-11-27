@@ -1,0 +1,8 @@
+[package]
+name = "gc"
+version = "0.1.0"
+authors = ["Sergei Fomin <sergio-dna@yandex.ru>"]
+edition = "2021"
+
+[dependencies]
+gc-derive = { path = "./gc-derive" }

@@ -1,0 +1,12 @@
+toolchain: stable
+allowed-patterns:
+  - src/*.rs
+  - orm-derive/src/*.rs
+steps:
+  linters:
+    - forbid-unsafe
+    - cargo-fmt
+    - cargo-clippy
+  testing:
+    - cargo-test
+    - cargo-compile-test-orm

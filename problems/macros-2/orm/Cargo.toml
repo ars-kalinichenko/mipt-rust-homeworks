@@ -1,0 +1,18 @@
+[package]
+name = "orm"
+version = "0.1.0"
+authors = ["Sergei Fomin <sergio-dna@yandex.ru>"]
+edition = "2021"
+
+[dependencies]
+orm-derive = { path = "./orm-derive" }
+rusqlite = "0.27.0"
+thiserror = "1.0.30"
+
+[dev-dependencies]
+tempfile = "3.3.0"
+compiletest_rs = "0.7.1"
+
+[features]
+test-lifetimes-create = []
+test-lifetimes-get = []

@@ -1,0 +1,11 @@
+toolchain: nightly
+allowed-patterns:
+  - src/trie_key.rs
+  - src/trie.rs
+steps:
+  linters:
+    - forbid-unsafe
+    - cargo-fmt
+    - cargo-clippy
+  testing:
+    - cargo-test

@@ -1,0 +1,20 @@
+toolchain: stable
+allowed-patterns:
+  - core/src/field.rs
+  - core/src/generic.rs
+  - core/src/hlist.rs
+  - core/src/labelled.rs
+  - derives/src/lib.rs
+  - core/src/transmogrify.rs
+  - derives/src/generic.rs
+  - derives/src/labelled.rs
+  - derives/src/lib.rs
+  - src/lib.rs
+steps:
+  linters:
+    - forbid-unsafe
+    - cargo-fmt
+    - cargo-clippy
+  testing:
+    - cargo-test
+    - cargo-compile-test-mini-frunk

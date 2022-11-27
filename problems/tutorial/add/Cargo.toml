@@ -1,0 +1,5 @@
+[package]
+name = "add"
+version = "0.1.0"
+authors = ["Alexander Stanovoy <alex.stanovoy@gmail.com>"]
+edition = "2021"

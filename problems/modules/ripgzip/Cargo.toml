@@ -1,0 +1,13 @@
+[package]
+name = "ripgzip"
+version = "0.1.0"
+authors = ["Sergei Fomin <sergio-dna@yandex.ru>"]
+edition = "2021"
+
+[dependencies]
+anyhow = ">= 1.0.56"
+byteorder = ">= 1.4.3"
+crc = ">= 2.1.0"
+log = ">= 0.4.14"
+stderrlog = ">= 0.5.1"
+structopt = ">= 0.3.26"

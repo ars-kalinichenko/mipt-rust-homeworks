@@ -1,0 +1,39 @@
+[workspace]
+members = [
+    # Problems
+    "problems/tutorial/add",
+    "problems/intro/combinations",
+    "problems/intro/conway",
+    "problems/intro/min-queue",
+    "problems/std-collections/comm",
+    "problems/std-collections/prefix",
+    "problems/std-collections/lru-cache",
+    "problems/traits/trust",
+    "problems/traits/mpsc",
+    "problems/traits/flatmap",
+    "problems/traits/itertools",
+    "problems/modules/trie",
+    "problems/modules/ripgzip",
+    "problems/borrowing/pstack",
+    "problems/borrowing/context",
+    "problems/borrowing/bst",
+    "problems/macros/fswalk",
+    "problems/macros/gc",
+    "problems/macros/mini-frunk",
+    "problems/macros-2/orm",
+    "problems/parallel/thread-pool",
+    "problems/parallel/pargrep",
+    "problems/parallel/tcp-proxy",
+    "problems/unsafe/smol-vec",
+    "problems/unsafe/snapshot",
+    "problems/async/crawler",
+    "problems/async/babencoin",
+
+    # Tools
+    "tools/rover",
+
+    # Additional
+    "lectures/lecture-04/code/example",
+    "lectures/lecture-08/code/echo",
+    "lectures/lecture-08/code/simple-runtime",
+]

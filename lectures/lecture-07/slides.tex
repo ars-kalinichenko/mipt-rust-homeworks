@@ -1,0 +1,1554 @@
+\documentclass[aspectratio=1610,t]{beamer}
+
+\usepackage[english]{babel}
+\usepackage{hyperref}
+\usepackage{minted}
+\usepackage{alltt}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[utf-8]{inputenc}
+
+\usetheme{metropolis}
+\usemintedstyle{xcode}
+\definecolor{codebg}{RGB}{247, 247, 246}
+\setbeamercolor{background canvas}{bg=white}
+\hypersetup{colorlinks,linkcolor=,urlcolor=orange}
+
+\title{Lecture 7: Unsafe. Parallel computing}
+\date{May 10, 2022}
+\author{Alexander Stanovoy}
+\institute{alex.stanovoy@gmail.com}
+
+\begin{document}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}
+\maketitle
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{In this lecture}
+\begin{itemize}
+    \item Unsafe and it's contracts
+    \item Pointers
+    \item Uninitialized memory
+    \item Unsafe: when and how
+    \item Parallel computing
+    \item Crossbeam
+    \item Rayon
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Unsafe and it's contracts}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Unsafe}
+Nearly all course we were talking about Safe Rust - a Rust where we cannot make any memory safety bugs or cause undefined behaviour.
+
+\textit{Unsafe Rust} is a superset of language where we can control our code more precisily while risking the Rust's safety: incorrect usage of it results in memory unsafety and undefined behaviour just like in unsafe languages!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Unsafe}
+It appears in Safe Rust we cannot write all of the code we may need in practice!
+
+\begin{itemize}
+    \item<2-> \texttt{Vec}, since we must have a buffer with a quite dangerous invariant: prefix of initialized elements and suffix with uninitialized values!
+    \item<3-> Perform some optimizations such as implementing linked lists without runtime overhead or save a little of bytes on allocations.
+    \item<4-> Implement functions with potentially malicious behaviour like \texttt{split\_at\_mut}.
+    \item<5-> Interfacing directly with hardware, operating systems, or other languages.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Unsafe}
+What exactly Unsafe Rust can do?
+
+\begin{itemize}
+    \item Dereference raw pointers.
+    \item Call unsafe functions (C functions, compiler intrinsics, and the raw allocator).
+    \item Implement \texttt{unsafe} traits.
+    \item Mutate statics.
+    \item Access fields of unions.
+\end{itemize}
+
+And that's all! Note that it's not disabling, for instance, borrow checker: it just grants us a power which, as we'll see, comes with great responsibility.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{unsafe} keyword}
+That's how \texttt{get\_unchecked} function is declared in \texttt{Vec}:
+
+\begin{minted}[fontsize=\small]{rust}
+    pub unsafe fn get_unchecked<I>(
+        &self,
+        index: I
+    ) -> &I::Output
+    where
+        I: SliceIndex<Self>,
+    {
+        // Note that we're dereferencing a pointer
+        // so we need 'unsafe' here!
+        unsafe { &*index.get_unchecked(self) }
+    }
+\end{minted}
+
+Every \texttt{unsafe} function upholds some contract that is usually rigorously documented! In this case, we're acquiring an element that's possibly not in the correct range.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{unsafe} keyword}
+That's how to use \texttt{unsafe} function in your code:
+
+\begin{minted}{rust}
+    let v = vec![1];
+    unsafe {
+        let x = v.get_unchecked(0);
+    }
+\end{minted}
+
+\texttt{unsafe} block allows us to use an \texttt{unsafe} functions and dereference pointers. That's all! Technically, there are a few other things you can do, but those don't change the point.
+
+Note that you can use such blocks everywhere, but be sure to uphold the contract!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{unsafe} keyword}
+For historical reasons, every \texttt{unsafe fn} contains an implicit unsafe block in Rust today. That is, if you declare an \texttt{unsafe fn}, you can always invoke any unsafe methods or primitive operations inside that \texttt{fn}.
+
+\visible<2->{
+    However, that decision is now considered a mistake, and it's currently being reverted through the already accepted and implemented \href{https://github.com/rust-lang/rfcs/blob/master/text/2585-unsafe-block-in-unsafe-fn.md}{RFC 2585}. This RFC warns about having an \texttt{unsafe fn} that performs unsafe operations without an explicit unsafe block inside it.
+}
+
+\visible<3->{
+    The lint will also likely become a hard error in future editions of Rust. The idea is to reduce the ``footgun radius'' - if every \texttt{unsafe fn} is one giant unsafe block, then you might accidentally perform unsafe operations without realizing it!
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{unsafe} keyword}
+This way we can declare \texttt{unsafe} trait in code:
+
+\begin{minted}{rust}
+    unsafe trait TrustedOrd: Ord {}
+\end{minted}
+
+Here, \texttt{unsafe} means, again, that \textbf{implementation of this trait} must uphold some contract. It's unsafe to implement it, not to use!
+
+\visible<2->{
+    Therefore, \texttt{unsafe} is needed to declare a contract that cannot be verified by the compiler and the programmer needs to uphold it by hand.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Soundness and Unsoundness}
+We already know what these words mean:
+
+\begin{itemize}
+    \item An abstraction is called \textit{sound} when any usage of it or the surrounding code with any arguments cannot cause memory unsafety and undefined behaviour.
+    \item An \textit{unsound} abstraction is an opposite to \textit{sound} abstraction.
+\end{itemize}
+
+\visible<2->{
+    Any \texttt{unsafe} code is unsound by default. To make it sound, we write a safe abstraction around it, checking whether the requirements of \texttt{unsafe} are satisfied.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Soundness and Unsoundness}
+An example is \texttt{split\_at\_mut} function of slice, which creates two \texttt{\&mut [T]} slices from one, that obviously violates the AXM rule, but at the same time is actually safe!
+
+\begin{minted}[fontsize=\small]{rust}
+    // Note the comment from the standard library!
+    pub fn split_at_mut(
+        &mut self,
+        mid: usize
+    ) -> (&mut [T], &mut [T]) {
+        assert!(mid <= self.len());
+        // SAFETY: '[ptr; mid]' and '[mid; len]'
+        // are inside 'self', which fulfills the
+        // requirements of 'split_at_mut_unchecked'.
+        unsafe { self.split_at_mut_unchecked(mid) }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Soundness and Unsoundness}
+\begin{minted}[fontsize=\small]{rust}
+    pub unsafe fn split_at_mut_unchecked(
+        &mut self,
+        mid: usize
+    ) -> (&mut [T], &mut [T]) {
+        let len = self.len();
+        let ptr = self.as_mut_ptr();
+        // SAFETY: Caller has to check that '0 <= mid <= self.len()'.
+        // '[ptr; mid]' and '[mid; len]' are not overlapping,
+        // so returning a mutable reference is fine.
+        unsafe {
+            (
+                from_raw_parts_mut(ptr, mid),
+                from_raw_parts_mut(ptr.add(mid), len - mid)
+            )
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Pointers}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointers}
+As we already seen, Rust actually have pointers! To interact with them, we usually use theirs methods, \texttt{std::ptr} and \texttt{std::mem} modules.
+
+\begin{minted}[fontsize=\small]{rust}
+    use std::ptr;
+
+    let x: *mut i32 = ptr::null_mut();
+    if x.is_null() {
+        let y: *const i32 = ptr::null();
+    }
+    let z: *mut &str = Box::into_raw(Box::new("abc"));
+    unsafe {
+        println!("{}", &(*z)[0..2]);  // ab
+    }
+\end{minted}
+
+It's safe to do whatewer we want with the pointers in Safe Rust until we need to dereference it.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointers}
+\textbf{Question}: What means \texttt{\&*} ?
+
+\begin{minted}{rust}
+    let s: *mut &str = Box::into_raw(Box::new("abc"));
+    let r = unsafe { &*z };
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointers}
+\textbf{Question}: What means \texttt{\&*} ?
+
+\begin{minted}{rust}
+    let s: *mut &str = Box::into_raw(Box::new("abc"));
+    let r: &&str = unsafe { &*z };
+\end{minted}
+
+It means ``Dereference a pointer, then create a reference to the inner \texttt{T}''. Note that violating AXM by, for instance, \textit{creating} two mutable references results in \textit{instant} undefined behaviour!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointers and references}
+The core difference between pointers and references is that:
+
+\begin{itemize}
+    \item Pointers aren't pointing to the valid data all of the time.
+    \item References have a lifetime dependency to track whether they're outliving their parent.
+\end{itemize}
+
+Pointers are usually proved useful when you cannot check the lifetime of the object statically.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointer arithmetic}
+With pointers, you can do arbitrary pointer arithmetic, just like you can in C, by using \texttt{.add()}, and \texttt{.sub()} to move the pointer to any byte that lives \textit{within the same allocation}:
+
+\begin{minted}{rust}
+    let arr: [u8; 4] = [0, 1, 2, 3];
+    let ptr: *const u8 = arr.as_ptr();
+
+    unsafe {
+        println!("{}", *ptr.add(1));  // 1
+        println!("{}", *ptr.add(2));  // 2
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointer arithmetic}
+\textbf{Question}: What means ``within the same allocation''? Why do we care?
+
+\visible<2->{
+    Since such pointers are invalid, \textbf{any} usage of it is undefined behaviour! For instance, compiler is allowed to decide to eat your code and replace it with arbitrary nonsense. This is why Rust marks \texttt{add} as \texttt{unsafe}.
+}
+
+\visible<3->{
+    Wow! Even writing such a simple code we can shoot a leg! Safe Rust guarranties that you won't do such a thing, but Unsafe Rust cannot.
+}
+
+\visible<4->{
+    To undestand better why we don't want to write unsafe code much even in other languages, let's check an example where the compiler uses 3 optimizations and breaks a code complitely.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointer arithmetic}
+Here's the code our compiler wants to optimize:\footnote{\href{https://www.ralfj.de/blog/2020/12/14/provenance.html}{Pointers Are Complicated II, or: We need better language specs}}
+
+\begin{minted}[fontsize=\small]{c}
+    // No optimizations
+    char p[1], q[1] = {0};
+    uintptr_t ip = (uintptr_t)(p+1);
+    uintptr_t iq = (uintptr_t)q;
+    if (iq == ip) {
+        *(char*)iq = 10;
+        print(q[0]);
+    }
+\end{minted}
+
+This program has two possible behaviors: either \texttt{ip} (the address one-past-the-end of \texttt{p}) and \texttt{iq} (the address of \texttt{q}) are different, and nothing is printed.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointer arithmetic}
+The first ``optimization'' we will perform is to exploit that if we enter the \texttt{if} body, we have \texttt{iq == ip}, so we can replace all \texttt{iq} by \texttt{ip}.
+
+\begin{minted}[fontsize=\small]{c}
+    // 1 optimization
+    char p[1], q[1] = {0};
+    uintptr_t ip = (uintptr_t)(p+1);
+    uintptr_t iq = (uintptr_t)q;
+    if (iq == ip) {
+        *(char*)(uintptr_t)(p+1) = 10;  // <- This line changed
+        print(q[0]);
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointer arithmetic}
+The second optimization notices that we are taking a pointer \texttt{p+1}, casting it to an integer, and casting it back, so we can remove the cast roundtrip:
+
+\begin{minted}[fontsize=\small]{c}
+    // 2 optimizations
+    char p[1], q[1] = {0};
+    uintptr_t ip = (uintptr_t)(p+1);
+    uintptr_t iq = (uintptr_t)q;
+    if (iq == ip) {
+        *(p+1) = 10;  // <- This line changed
+        print(q[0]);
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointer arithmetic}
+The final optimization notices that \texttt{q} is never written to, so we can replace \texttt{q[0]} by its initial value 0:
+
+\begin{minted}[fontsize=\small]{c}
+    // 3 optimizations
+    char p[1], q[1] = {0};
+    uintptr_t ip = (uintptr_t)(p+1);
+    uintptr_t iq = (uintptr_t)q;
+    if (iq == ip) {
+        *(p+1) = 10;
+        print(0);  // <- This line changed
+    }
+\end{minted}
+
+But wait, this code \textbf{never} produces the same input as original!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointer arithmetic}
+\textbf{Question}: One of these optimizations is incorrect. But which one is it?
+
+\visible<2->{
+    You may think of the last optimization...
+}
+
+\visible<3->{
+    When compiler decided to perform it, the main observation was like: ``Since \texttt{q} and \texttt{p} point to different local variables, a pointer derived from \texttt{p} cannot alias \texttt{q[0]}, and hence we know that this write cannot affect the value stored at \texttt{q[0]}''.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointer arithmetic}
+But it appears it's a programmers fault!
+
+\begin{minted}[fontsize=\small]{c}
+    // No optimizations
+    char p[1], q[1] = {0};
+    uintptr_t ip = (uintptr_t)(p+1);
+    uintptr_t iq = (uintptr_t)q;
+    if (iq == ip) {
+        *(char*)iq = 10;
+        print(q[0]);
+    }
+\end{minted}
+
+\texttt{p+1} is a one-past-the-end pointer, so it actually can have the same address as \texttt{q[0]}. However, LLVM IR (just like C) \textbf{does not permit memory accesses through one-past-the-end pointers}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Pointer arithmetic}
+So, writing unsafe code is hard, and it's not only about writing unsafe Rust.
+
+Are you already frightened? Me too.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{mem::transmute}}
+Sometimes, you have a type \texttt{T} and want to treat it as some other type \texttt{U}. In C, you can just cast a type. In Rust, we only know how to convert one object into another.
+
+There's actually a way to reinterpret the bits of a value of one type as another type - \texttt{std::mem::transmute}.
+
+\begin{minted}{rust}
+    fn foo() -> i32 {
+        42
+    }
+    let pointer = foo as *const ();
+    let function = unsafe {
+        std::mem::transmute::<*const (), fn() -> i32>(pointer)
+    };
+    assert_eq!(function(), 42);
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{mem::transmute}}
+The only verification \texttt{transmute} applies is that the \texttt{T} and \texttt{U} must have the same size. There's a whole spectrum of things you should consider while transmuting memory:
+
+\begin{itemize}
+    \item<1-> Creating an instance of any type with an invalid state is going to cause arbitrary chaos that can't really be predicted. Do not transmute \texttt{3u8} to \texttt{bool}. \textbf{Even if you never do anything with the} \texttt{bool}!
+    \item<2-> Transmuting an \texttt{\&} to \texttt{\&mut} is \textbf{always} undefined behaviour.
+\end{itemize}
+
+\visible<3->{
+    To be more specific, creating an invalid value of type \texttt{T} always results in undefined behaviour, because Rust relies on that.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{mem::transmute\_copy}}
+\texttt{mem::transmute\_copy} is even more unsafe: it doesn't check whether types have the same size! It copies \texttt{size\_of<U>} bytes out of an \texttt{\&T} and interprets them as a \texttt{U}.
+
+It is undefined behavior for \texttt{U} to be larger than \texttt{T}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Uninitialized memory}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Uninitialized memory}
+Sometimes you need to store a value that isn't currently valid for its type.
+
+\visible<2->{
+    The most common example of this is if you want to allocate a chunk of memory for some type \texttt{T} and then read in the bytes from, for instance, the network.
+}
+
+\visible<3->{
+    For this, we use the \texttt{std::mem::MaybeUninit<T>} structure. It stores exactly a \texttt{T}, but the compiler knows to make no assumptions about the validity of that \texttt{T}.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Uninitialized memory}
+The core methods of \texttt{MaybeUninit}:
+
+\begin{itemize}
+    \item \texttt{uninit()} - creates a new \texttt{MaybeUninit}, or, simply speaking, a type of size of \texttt{T}. Not that you \textbf{cannot} rely on its contents, since it's uninitialized!
+    \item \texttt{new(val: T)} - creates a new \texttt{MaybeUninit} initializing it with the contents of \texttt{T}. The compiler still make no assumptions on the contents of resulting \texttt{MaybeUninit}.
+    \item \texttt{assume\_init(self) -> T} - assumes current \texttt{MaybeUninit} to be initialized and returns it as \texttt{T}. Note that this function is \texttt{unsafe}.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Uninitialized memory}
+Let's create an array of values, assuming that this array can be partly uninitialized during the process.
+
+\begin{minted}[fontsize=\small]{rust}
+    let array = unsafe {
+        // Type inference gives
+        // MaybeUninit::<[MaybeUninit<MyType>; 256]>::uninit()
+        // There's also nightly feature with function 'uninit_array'
+        let mut array: [MaybeUninit<MyType>; 256] =
+            MaybeUninit::uninit().assume_init();
+
+        for (i, elem) in array.iter_mut().enumerate() {
+            *elem = MaybeUninit::new(calculate_elem(i));
+        }
+
+        std::mem::transmute::<_, [MyType; 256]>(array)
+    };
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Uninitialized memory}
+When working with uninitialized memory and pointers, you should keep in mind that modifying the contents of the pointer by using dereference calls \texttt{drop}.
+
+\begin{minted}{rust}
+    let mut b: MaybeUninit<Box<i32>> = MaybeUninit::uninit();
+    // 'as_mut_ptr' returns a '*mut T'
+    unsafe {
+        // Totally wrong!
+        *b.as_mut_ptr() = Box::new(42 as i32);
+    }
+\end{minted}
+
+So, in fact, in the example above, if our type \texttt{MyType} implements \texttt{Drop}, we'll receive undefined behaviour for free!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Uninitialized memory}
+The correct alternative, if for some reason we cannot use \texttt{MaybeUninit::new}, is to use the \texttt{std::ptr} module.
+
+\begin{itemize}
+    \item<2-> \texttt{ptr::write(ptr, val)} takes a \texttt{val} and moves it into the address pointed to by \texttt{ptr}.
+    \item<3-> \texttt{ptr::copy(src, dest, count)} copies the bits that count \texttt{T}'s would occupy from \texttt{src} to \texttt{dest}. (this is equivalent to \texttt{memmove})
+    \item<4-> \texttt{ptr::copy\_nonoverlapping(src, dest, count)} does what copy does, but a little faster on the assumption that the two ranges of memory don't overlap. (this is equivalent to \texttt{memcpy})  
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Uninitialized memory}
+One more remark: it's illegal to construct a reference to uninitialized data! Instead, use pointers.
+
+\visible<2->{
+    But what if we want to take a pointer to the field of the structure?
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Uninitialized memory}
+It's illegal to construct a reference to uninitialized data! Instead, use pointers.
+
+But what if we want to take a pointer to the field of the structure?
+
+Ok, straightforward way:
+
+\begin{minted}{rust}
+    &some_struct.field as *const _
+\end{minted}
+
+\visible<2->{
+    The problem here is not only that we're creating a reference here - imagine our struct to be \texttt{packed}. Our reference will be invalid since it is unaligned!
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Uninitialized memory}
+To fix this, use \texttt{addr\_of} and \texttt{addr\_of\_mut}.
+
+\begin{minted}{rust}
+    struct Demo {
+        field: bool,
+    }
+
+    let mut uninit = MaybeUninit::<Demo>::uninit();
+    let f1_ptr = unsafe {
+        ptr::addr_of_mut!((*uninit.as_mut_ptr()).field)
+    };
+    unsafe { f1_ptr.write(true); }
+
+    let init = unsafe { uninit.assume_init() };
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Uninitialized memory}
+As you may remember, Rust compiler makes optimizations depending on possible values of the type. For instance, \texttt{Option<Box<T>>} has the same size as just \texttt{Box<T>}. It's called \textit{niche optimization}.
+
+But when \texttt{T} is \texttt{MaybeUninit<U>}, then you cannot make any assumptions about the underlying value! That implies \texttt{Option<MaybeUninit<T>>} is not the same as \texttt{Option<T>}.
+
+The same applies to other similar containers such as \texttt{NonZero}, \texttt{NonNull} and so on.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Uninitialized memory}
+\begin{minted}[fontsize=\small]{rust}
+    let array = unsafe {
+        let mut array: [MaybeUninit<MyType>; 256] =
+            MaybeUninit::uninit().assume_init();
+
+        for (i, elem) in array.iter_mut().enumerate() {
+            *elem = MaybeUninit::new(calculate_elem(i));
+        }
+
+        std::mem::transmute::<_, [MyType; 256]>(array)
+    };
+\end{minted}
+
+What if \texttt{MyType} needs to drop (eg. allocates a memory) and \texttt{calculate\_elem} panics? We'll end up with a memory leak! You should keep it in mind while using uninitialized memory.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Unsafe: when and why}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Unsafe: when and why}
+\begin{itemize}
+    \item<1-> Unsafe code can violate all of Rust's safety guarantees, and this is often touted as a reason why Rust's whole safety argument is a charade.
+    \item<2-> But actually, many successiful safe languages have an unsafe superset, usually in the form of code written in C or assembly.
+    \item<3-> So, you \textit{do} need unsafe code when it comes to writing something low-level.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Unsafe: when and why}
+\begin{itemize}
+    \item<1-> If you're now afraid of writing unsafe code, just remember you've already written in C++ and somehow managed to survive :)
+    \item<2-> The most important part is to read (and write!) the documentation about unsafe functions and carefully check whether all of the invariants are satisfied all the time.
+    \item<3-> Try to write as less unsafe code as possible, minimize unsafe blocks size.
+    \item<4-> Reuse existing crates: they are always well-tested by community, and remember that soundness bugs are the most punishable bugs in the Rust community.
+    \item<5-> And test your work! In that, tools like \href{https://github.com/rust-lang/miri}{Miri} will help you much.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Parallel Computing}\let\thefootnote\relax\footnotetext{\textit{In this chapter, you're supposed to have finished Concurrency course.}}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Parallel Computing}
+It's time to make our programs multithreaded! The best way to start is to create new threads and compute something in parallel.
+
+To do so, we use \texttt{std::thread::spawn}.
+
+\begin{minted}{rust}
+    pub fn spawn<F, T>(f: F) -> JoinHandle<T> 
+    where
+        F: FnOnce() -> T,
+        F: Send + 'static,
+        T: Send + 'static,
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Parallel Computing}
+Example:
+
+\begin{minted}{rust}
+    const THREAD_NUM: usize = 8;
+    let result: Vec<usize> = (0..THREAD_NUM)
+        .map(|_| thread::spawn(move || simulate()))
+        .map(|handle| handle.join().expect("thread panicked!"))
+        .collect();
+\end{minted}
+
+\visible<2->{
+    \textbf{Question}: Why do we need this \texttt{expect}?
+}
+
+\visible<3->{
+    Thread can panic while executing. This panic should stop in the source thread. When joining, our \texttt{JoinHandle} will give us a \texttt{Result} with either a final value or an error with a panic value.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{'static} in \texttt{thread::spawn}}
+Consider the following code:
+
+\begin{minted}{rust}
+    fn example() {
+        let vec = vec![1, 2, 3];
+        let handle = thread::spawn(|| {
+            for i in vec.iter() {
+                println!("{i}");
+            }
+        });
+        handle.join();
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{'static} in \texttt{thread::spawn}}
+\begin{minted}[fontsize=\small]{rust}
+error[E0373]: closure may outlive the current function, but it
+              borrows `vec`, which is owned by the current function
+ --> src/main.rs:5:31
+  |
+5 |     let handle = thread::spawn(|| {
+  |                                ^^ may outlive borrowed value `vec`
+6 |         for i in vec.iter() {
+  |                  --- `vec` is borrowed here
+  |
+note: function requires argument type to outlive `'static`
+ ...
+help: to force the closure to take ownership of `vec` (and any
+      other referenced variables), use the `move` keyword
+  |
+5 |     let handle = thread::spawn(move || {
+  |                                ++++
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{'static} in \texttt{thread::spawn}}
+\begin{itemize}
+    \item Rust knows nothing about a \texttt{join}.
+    \item Moreover, even if it will know, it cannot guarrantie that we won't panic until \texttt{join}.
+    \item And the most ridiculous: nothings stops us from \textit{leaking} a \texttt{JoinHandle}!
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{'static} in \texttt{thread::spawn}}
+So, we need to make closure \texttt{'static} to outlive any possible variable in the program. We'll use \texttt{move} here as the compiler suggests.
+
+\begin{minted}{rust}
+    fn example() {
+        let vec = vec![1, 2, 3];
+        let guard = thread::spawn(move || {
+            for i in vec.iter() {
+                println!("{i}");
+            }
+        });
+        guard.join();
+    }
+\end{minted}
+
+The same answer applies to the question about \texttt{T} having \texttt{'static} lifetime.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{'static} in \texttt{thread::spawn}}
+One more program:
+
+\begin{minted}{rust}
+    fn count_foo_bar(data: &str) -> usize {
+        let t1 = thread::spawn(|| data.matches("foo").count());
+        let t2 = thread::spawn(|| data.matches("bar").count());
+        t1.join().unwrap() + t2.join().unwrap()
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{'static} in \texttt{thread::spawn}}
+One more program:
+
+\begin{minted}{rust}
+    fn count_foo_bar(data: &str) -> usize {
+        let t1 = thread::spawn(|| data.matches("foo").count());
+        let t2 = thread::spawn(|| data.matches("bar").count());
+        t1.join().unwrap() + t2.join().unwrap()
+    }
+\end{minted}
+
+\begin{minted}{rust}
+error[E0621]: explicit lifetime required in the type of
+              `data` --> src/lib.rs:4:14
+  |
+4 | let t1 = thread::spawn(|| data.matches("foo").count());
+  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+             lifetime `' static` required
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{'static} in \texttt{thread::spawn}}
+\begin{minted}{rust}
+    fn count_foo_bar(data: Rc<str>) -> usize {
+        let data_2 = data.clone();
+        let t1 = thread::spawn(move || {
+            data.matches("foo").count()
+        });
+        let t2 = thread::spawn(move || {
+            data_2.matches("bar").count()
+        });
+        t1.join().unwrap() + t2.join().unwrap()
+    }    
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{'static} in \texttt{thread::spawn}}
+\begin{minted}[fontsize=\small]{rust}
+error[E0277]: `Rc<str>` cannot be sent between threads safely
+   --> src/main.rs:7:18
+    |
+7   |           let t1 = thread::spawn(move || {
+    |  __________________^^^^^^^^^^^^^_-
+    | |                  |
+    | |                  `Rc<str>` cannot be sent between
+    | |                  threads safely
+8   | |             data.matches("foo").count()
+9   | |         });
+    | |_________- within this `[closure@src/main.rs:7:32: 9:10]`
+    |
+    = help: within `[closure@src/main.rs:7:32: 9:10]`, the
+            trait `Send` is not implemented for `Rc<str>`
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{'static} in \texttt{thread::spawn}}
+\textbf{Question}: Can you guess what means \texttt{Send}?
+
+\visible<2->{
+    If we could send \texttt{Rc} between threads, it will be possible to have 2 threads simultaneously modifying the underlying non-atomic counter!
+}
+
+\visible<3->{
+    Or, simply speaking, we'll run into a \textbf{data race}.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{Send} and \texttt{Sync} traits}
+Firstly, let's remember what is a data race.
+
+\visible<2->{
+    The simple one which doesn't involve memory models is defined as follows:
+}
+
+\begin{itemize}
+    \item<2-> Two or more threads concurrently accessing a location of memory.
+    \item<2-> One or more of them is a write.
+    \item<2-> One or more of them is unsynchronized.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{Send} and \texttt{Sync} traits}
+When Rust was on it's early stages, people believed memory safety and data race safety were totally different things. \textit{But actually, the first implies the second!}
+
+\visible<2->{
+    Data races are mostly prevented through Rust's ownership system: it's impossible to alias a mutable reference, so it's impossible to perform a data race.
+}
+
+\visible<3->{
+    Interior mutability makes this more complicated, which is largely why we have the \texttt{Send} and \texttt{Sync} traits.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{Send} and \texttt{Sync} traits}
+\texttt{Send} and \texttt{Sync} are \textbf{unsafe} marker traits with the following meaning:
+
+\begin{itemize}
+    \item A type is \texttt{Send} if it is safe to send it to another thread.
+    \item A type is \texttt{Sync} if it is safe to share between threads. \visible<2->{(\texttt{T} is \texttt{Sync} if and only if \texttt{\&T} is \texttt{Send})}
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{Send} and \texttt{Sync} traits}
+We need to complete a little quiz to understand what's happening. What's the types are \texttt{Sync} and \texttt{Send}?
+
+\begin{itemize}
+    \item \texttt{i32} \visible<2->{- \texttt{Send} and \texttt{Sync}.}
+    \item \texttt{Vec<i32>} \visible<3->{- \texttt{Send} and \texttt{Sync}.}
+    \item \texttt{\&str} \visible<4->{- \texttt{Send} and \texttt{Sync}.}
+    \item \texttt{Rc<T>} \visible<5->{- not \texttt{Send} nor \texttt{Sync}.}
+    \item \texttt{Cell<T>} \visible<6->{- only \texttt{Send}.}
+    \item \texttt{MutexGuard<'static, ()>} \visible<7->{- only \texttt{Sync}.}
+    \item \texttt{*mut T} \visible<8->{- not \texttt{Send} nor \texttt{Sync}.}
+\end{itemize}
+
+\visible<9->{
+    Most types are \texttt{Send} and \texttt{Sync}, but there's some exceptions.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{Send} and \texttt{Sync} traits}
+\texttt{Send}/\texttt{Sync} are also \texttt{auto} traits: they are implemented automatically for a type if all of its generics are \texttt{Send}/\texttt{Sync}.
+
+Their final definition is:
+
+\begin{minted}{rust}
+    pub unsafe auto trait Send {}
+    pub unsafe auto trait Sync {}
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{Send} and \texttt{Sync} traits}
+In the incredibly rare case that a type is inappropriately automatically derived to be \texttt{Send} or \texttt{Sync}, then one can also unimplement \texttt{Send} and \texttt{Sync}.
+
+\begin{minted}{rust}
+    #![feature(negative_impls)]
+
+    // I have some magic semantics for
+    // some synchronization primitive!
+    struct SpecialThreadToken(u8);
+
+    impl !Send for SpecialThreadToken {}
+    impl !Sync for SpecialThreadToken {}
+\end{minted}
+
+Please note that this requires the nightly compiler! Possibly, \texttt{negative\_impls} feature will land in the near future.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{Send} and \texttt{Sync} traits}
+In case you want to unimplement \texttt{Send} and \texttt{Sync} on the stable compiler, you can use \texttt{PhantomData}.
+
+\begin{minted}{rust}
+    type DisableSend = PhantomData<MutexGuard<'static, ()>>;
+    type DisableSync = PhantomData<Cell<()>>;
+
+    struct Test {
+        disable_send: DisableSend,
+        disable_sync: DisableSync,
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{Send} and \texttt{Sync} traits}
+To solve this problem, we need \texttt{Arc} - \textit{atomic} reference counting pointer.
+
+\begin{minted}{rust}
+    use std::sync::Arc;
+
+    fn count_foo_bar(data: Arc<str>) -> usize {
+        let data_2 = data.clone();
+        let t1 = thread::spawn(move || {
+            data.matches("foo").count()
+        });
+        let t2 = thread::spawn(move || {
+            data_2.matches("bar").count()
+        });
+        t1.join().unwrap() + t2.join().unwrap()
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{std::sync}}
+You should know from the concurrency course that \texttt{Arc} isn't possible without atomics. Moreover, \textit{nothing} is possible without atomics.
+
+\visible<2->{
+    To make atomics work, we need a memory model. We could just say ``It's enough to have sequential consistency'', but we're in Rust and want to make the fastest applications, right?
+}
+
+\visible<3->{
+    Rust just reuses C++20 memory model. It's not because this model is perfect (actually, everyone is pretty bad at modeling atomics), but because this model is well-studied and widely used. If there will appear a good memory model in academy, Rust will adopt it.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{std::sync}}
+\texttt{std::sync} module contains the simpliest primitives of synchronizations. We'll start with the simpliest submodule - \texttt{sync::atomic::*}.
+
+\begin{minted}[fontsize=\small]{rust}
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct RequestHandler {
+        counter: Arc<AtomicUsize>,
+    }
+    impl RequestHandler {
+        fn handle_request(&self, req: ...) {
+            self.counter.fetch_add(1, Ordering::SeqCst);
+            /* ... */
+        }
+    }
+\end{minted}
+
+\textbf{Question}: Why do we need \texttt{Arc}?
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{std::sync}}
+\textbf{Question}: Can incorrect memory ordering lead to memory unsafety?
+
+\visible<2->{
+    \textbf{No}, until your code uses unsafe which relies on correct memory orders.
+}
+
+\visible<3->{
+    \textbf{Question}: Ok, data races are gone. But what about \textit{general race conditions}?
+}
+
+\visible<3->{
+    Race conditions can happen in Rust: your program can still get deadlocked or do something nonsensical with incorrect synchronization. \textit{Still, a race condition can't violate memory safety in a Rust program on its own!}
+}
+
+\visible<4->{
+    And it's the reason of existance of Rust's marketing term called ``Fearless concurrency'', meaning ``You won't have data races, memory unsafety and undefined behaviour writing multithreaded code in Safe Rust''.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{std::sync}}
+\begin{minted}[fontsize=\small]{rust}
+    let data = vec![1, 2, 3, 4];
+    let idx = Arc::new(AtomicUsize::new(0));
+    let other_idx = idx.clone();
+
+    thread::spawn(move || {
+        other_idx.fetch_add(10, Ordering::SeqCst);
+    });
+
+    // Race condition!
+    // May panic but won't give us a memory unsafety
+    println!("{}", data[idx.load(Ordering::SeqCst)]);
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{std::sync}}
+\begin{minted}[fontsize=\small]{rust}
+    let data = vec![1, 2, 3, 4];
+    let idx = Arc::new(AtomicUsize::new(0));
+    let other_idx = idx.clone();
+    thread::spawn(move || {
+        other_idx.fetch_add(10, Ordering::SeqCst);
+    });
+
+    if idx.load(Ordering::SeqCst) < data.len() {
+        // We can get memory unsafety here because of unsafe!
+        unsafe {
+            println!(
+                "{}",
+                data.get_unchecked(idx.load(Ordering::SeqCst))
+            );
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{std::sync}}
+You can notice that atomic is, actually, an interior mutability primitive which works in integers, exactly a multithreaded \texttt{Cell}.
+
+\textbf{Question}: What is a multithreaded \texttt{RefCell}?
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{std::sync}}
+\texttt{Mutex} is a mutual exclusion primitive used for protecting some \texttt{T}.
+
+As you already know from the Concurrency course, \texttt{Mutex} usually protects some object. In reviews, you were probabily punished for writing mutex with name \texttt{mutex\_} protecting unclear state :)
+
+In Rust, it's also an interior mutability primitive, that is exactly a multithreaded \texttt{RefCell}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{std::sync}}
+Rust have a number of other synchronization primitives:
+
+\begin{itemize}
+    \item \texttt{Barrier}.
+    \item \texttt{Condvar}.
+    \item \texttt{mpsc}.
+    \item \texttt{RwLock}.
+    \item \texttt{Once} - Used for thread-safe, one-time initialization of a global variable.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{std::sync}}
+An example of \texttt{Once}:
+
+\begin{minted}[fontsize=\small]{rust}
+    static mut VAL: usize = 0;
+    static INIT: Once = Once::new();
+
+    fn get_cached_val() -> usize {
+        unsafe {
+            INIT.call_once(|| {
+                // Safety: we only mutate VAL once
+                // in a synchronized fashion
+                VAL = expensive_computation();
+            });
+            VAL
+        }
+    }
+    fn expensive_computation() -> usize { /* ... */ }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Poisoning}
+Imagine our thread to panic while holding a \texttt{MutexGuard}. It means some data was partly modified when panic occured! It's not the thing that is actually violates memory safety, but we can break invariants without even noticing!
+
+\visible<2->{
+    Unlike C++, when locking \texttt{Mutex}, you're given \texttt{LockResult<MutexGuard<'\_, T>>} which gives you a lock or \texttt{PoisonError}, meaning the mutex is poisoned, i.e thread that was holding a lock panicked!
+
+    The same applies to the thread and mpsc-queue.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Crossbeam}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Crossbeam}
+Crossbeam is a crate with a set of tools for concurrent programming, and mainly exists to complement \texttt{std::sync}. Possibly, the parts of this crate will be moved to \texttt{std}!
+
+Also provides some constructs useful for implementing lock-free algorithms!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::scope}}
+\texttt{crossbeam::scope} is used to create a scoped thread.
+
+\begin{minted}{rust}
+    pub fn scope<'env, F, R>(
+        f: F
+    ) -> Result<R, Box<dyn Any + 'static + Send, Global>> 
+    where
+        F: FnOnce(&Scope<'env>) -> R;
+\end{minted}
+
+\begin{itemize}
+    \item<2-> Creates a scope for running threads.
+    \item<3-> Joins all of the threads running inside it, for which \texttt{join} was not called manually.
+    \item<4-> Allows threads to capture local variables. On panic, returns an error.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::scope}}
+Usage example:
+
+\begin{minted}[fontsize=\small]{rust}
+    let people = vec![
+        "Alice".to_owned(), "Bob".to_owned(), "Carol".to_owned()
+    ];
+    thread::scope(|s| {
+        for person in &people {
+            s.spawn(move |_| {
+                println!(
+                    "Hello from {:?}, {}!",
+                    std::thread::current().id(),
+                    person
+                );
+            });
+        }
+    }).unwrap();
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::scope}}
+Panic example:
+
+\begin{minted}[fontsize=\small]{rust}
+    thread::scope(|s| {
+        s.spawn(move |_| {
+            println!("one");
+            panic!("panic one");
+        });
+        s.spawn(move |_| {
+            println!("two");
+            panic!("panic two");
+        });
+    }).map_err(|e| println!("{:?}", e));
+\end{minted}
+
+\begin{minted}[fontsize=\small]{rust}
+    thread '<unnamed>' panicked at 'panic two', src/main.rs:9:13
+    thread '<unnamed>' panicked at 'panic one', src/main.rs:5:13
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::channel}}
+\texttt{crossbeam::channel} is an alternative to \texttt{std::sync::mpsc}.
+
+\begin{itemize}
+    \item Message passing channels (Multi-Producer Multi-Consumer, MPMC).
+    \item The channel may be limited by the size of the message buffer. Or unlimited.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::channel}}
+Usage example:
+
+\begin{minted}[fontsize=\small]{rust}
+    let (send_end, receive_end) = channel::bounded(5);
+    for i in 0..5 {
+        send_end.send(i).unwrap();
+    }
+    // Will block!
+    send_end.send(5).unwrap();
+
+    let (send_end, receive_end) = channel::unbounded();
+    for i in 0..1000 {
+        send_end.send(i).unwrap();
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::channel}}
+Send and receive can be:
+
+\begin{itemize}
+    \item Non-blocking.
+    \item Blocking.
+    \item With timeout.
+\end{itemize}
+
+\begin{minted}[fontsize=\small]{rust}
+    pub fn try_send(&self, msg: T) -> Result<(), TrySendError<T>>;
+
+    pub fn send(&self, msg: T) -> Result<(), SendError<T>>;
+
+    pub fn send_timeout(
+        &self,
+        msg:T
+        timeout: Duration
+    ) -> Result<(), SendTimeoutError<T>>;
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::channel}}
+\begin{itemize}
+    \item<1-> Send and receive handlers can be cloned and passed between threads. The channel remains the same - MPMC.
+    \item<2-> If all handlers of one of the ends are dropped, the channel goes into the \textit{disconnected} state.
+    \item<3-> Messages cannot be sent when channel is closed. But you can read already sent messages.
+    \item<4-> Operations on the disconnected channel aren't blocking.
+    \item<5-> You can use iterators on the channel: \texttt{iter()} for blocking, \texttt{try\_iter()} for non-blocking.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::select!}}
+\begin{minted}[fontsize=\small]{rust}
+    let (s1, r1) = channel::unbounded();
+    let (s2, r2) = channel::unbounded();
+    thread::spawn(move || assert_eq!(s1.send(10), Ok(())));
+    thread::spawn(move || assert_eq!(r2.recv(), Ok(20)));
+    select! {
+        recv(r1) -> msg => assert_eq!(msg, Ok(10)),
+        send(s2, 20) -> res => assert_eq!(res, Ok(())),
+        default(Duration::from_secs(1)) => println!("timed out"),
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::select!}}
+\begin{minted}[fontsize=\small]{rust}
+    let (s1, r1) = channel::unbounded();
+    let (s2, r2) = channel::unbounded();
+    let mut sel = Select::new();
+    let oper1 = sel.recv(&r1);
+    let oper2 = sel.send(&s2);
+    let oper = sel.select_timeout(Duration::from_secs(1));
+    match oper {
+        Ok(oper) => match oper.index() {
+            i if i == oper1 => assert_eq!(oper.recv(&r1), Ok(10)),
+            i if i == oper2 => assert_eq!(oper.send(&s2, 20), Ok(())),
+            _ => panic!("forgotten operation"),
+        },
+        Err(_) => println!("timed out"),
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::utils}}
+\begin{itemize}
+    \item<1-> \texttt{CachePadded} - pads the type along the cache line to disable \textit{false sharing}.
+    \item<2-> \texttt{ShardedLock} - sharded \texttt{RwLock}. Read captures the read lock in one shard, write captures all shards. Faster in read and slower in write than \texttt{RwLock}.
+    \item<3-> \texttt{Backoff} - exponential backoff implementation.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::deque}}
+\texttt{crossbeam::deque} - a concurrent deck that supports work stealing. Used to implement task schedulers.
+\begin{itemize} 
+    \item<2-> Contains a global queue and each thread has a local queue.
+    \item<3-> There's a \texttt{Steal} for stealing tasks from another thread's local queue.
+    \item<4-> The thread first tries to take the task from its own queue, then from the global one, then it tries to steal the task from another thread.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{crossbeam::epoch}}
+\texttt{crossbeam::epoch} - garbage collector for lock-free algorithms.
+\begin{itemize} 
+    \item<2-> Solves the problem of deleting elements in lock-free algorithms.
+    \item<3-> When deleted, the items are added to the basket corresponding to the epoch.
+    \item<4-> When interacting with a lock-free data structure, we increment the epoch.
+    \item<5-> And clean the garbage from the baskets from the last two epochs.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Rayon}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Rayon}
+Rayon is a crate for data-parallelism. It's very easy to use and lightweight! It just creates a \textbf{work-stealing} thread-pool and sends a number of tasks to it. The crate is optimized for CPU-bound tasks.
+
+The usage is as simple as writing default Rust code!
+
+\begin{minted}{rust}
+    use rayon::prelude::*;
+
+    fn sum_of_squares(input: &[i32]) -> i32 {
+        input
+            .par_iter()
+            .map(|&i| i * i)
+            .sum()
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Rayon}
+\textit{In short: There's no standard for building C programs. It's a non-portable mess, and a time sink. Cross-compilation of OpenMP was the last straw. Rust/Cargo is much more dependable, and enables me to support more features on more platforms.}\footnote{\href{https://pngquant.org/rust.html}{Improved portability and performance (libimagequant)}}
+
+\visible<2->{
+    Additionaly, Rayon \textit{never} had issues with memory safety. You can be sure your program is memory safe at compile time!
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{rayon::join}}
+\texttt{rayon::join} is used to run two closures.
+
+\begin{minted}[fontsize=\small]{rust}
+    pub fn join<A, B, RA, RB>(oper_a: A, oper_b: B) -> (RA, RB)
+    where
+        A: FnOnce() -> RA + Send, B: FnOnce() -> RB + Send,
+        RA: Send, RB: Send;
+\end{minted}
+
+\begin{itemize}
+    \item<2-> If used inside the thread pool, current thread executes one closure and the second is moved to the thread pool queue.
+    \item<3-> If used outside of the thread pool, current thread will run closures sequentially.
+    \item<4-> It is assumed that the closures are CPU-bound. If a closure blocks, it will block the thread in the thread pool and prevent us from utilizing all of the cores!
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{rayon::join}}
+Usage example:
+
+\begin{minted}[fontsize=\small]{rust}
+    fn quick_sort<T: Ord + Send>(v: &mut [T]) {
+        if v.len() > 1 {
+            let mid = partition(v);
+            let (lo, hi) = v.split_at_mut(mid);
+            rayon::join(
+                || quick_sort(lo),
+                || quick_sort(hi)
+            );
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{rayon::scope}}
+\texttt{rayon::scope} is used to create a scoped thread.
+
+\begin{minted}{rust}
+    pub fn scope<'scope, OP, R>(op: OP) -> R
+    where
+        R: Send,
+        OP: FnOnce(&Scope<'scope>) -> R + Send;
+\end{minted}
+
+\begin{itemize}
+    \item<2-> Similar to \texttt{crossbeam::scope}, but \texttt{crossbeam::scope} starts threads in the created scope, while \texttt{rayon::scope} creates tasks that will be run in thread poll in the created scope.
+    \item<3-> \texttt{rayon::scope} waits for all tasks to complete.
+    \item<4-> More flexible than \texttt{rayon::join}. But because of this, it uses the heap, where \texttt{rayon::join} can use the stack and avoid allocation.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\end{document}

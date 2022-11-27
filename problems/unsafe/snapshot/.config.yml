@@ -1,0 +1,11 @@
+toolchain: nightly
+allowed-patterns:
+  - src/lib.rs
+steps:
+  linters:
+    - cargo-fmt
+    - cargo-clippy
+  testing:
+    - cargo-test
+    - cargo-miri-test
+    - cargo-compile-test-snapshot

@@ -1,0 +1,15 @@
+[package]
+name = "crawler"
+version = "0.1.0"
+authors = ["Sergei Fomin <sergio-dna@yandex.ru>"]
+edition = "2021"
+
+[dependencies]
+futures = "0.3.21"
+linkify = "0.8.1"
+reqwest = "0.11.10"
+tokio = { version = "1.18.2", features = ["full"] }
+
+[dev-dependencies]
+rand = "0.8.4"
+tide = "0.16.0"

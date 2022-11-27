@@ -1,0 +1,10 @@
+toolchain: stable
+allowed-patterns:
+  - src/lib.rs
+steps:
+  linters:
+    - forbid-unsafe
+    - cargo-fmt
+    - cargo-clippy
+  testing:
+    - cargo-test

@@ -1,0 +1,1802 @@
+\documentclass[aspectratio=1610,t]{beamer}
+
+\usepackage[english]{babel}
+\usepackage{hyperref}
+\usepackage{minted}
+\usepackage{alltt}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[utf-8]{inputenc}
+
+\usetheme{metropolis}
+\usemintedstyle{xcode}
+\definecolor{codebg}{RGB}{247, 247, 246}
+\setbeamercolor{background canvas}{bg=white}
+\hypersetup{colorlinks,linkcolor=,urlcolor=orange}
+
+\title{Lecture 5: Metaprogramming}
+\date{April 5, 2022}
+\author{Alexander Stanovoy}
+\institute{alex.stanovoy@gmail.com}
+
+\begin{document}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}
+\maketitle
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{In this lecture}
+\begin{itemize}
+    \item Closures
+    \item Intro to Metaprogramming
+    \item Declarative macros
+    \item Procedural macros
+    \item Macros from standard library
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Closures}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures}
+You've already seen closures in homeworks and lectures:
+
+\begin{minted}{rust}
+    let x = 4;
+    let equal_to_x = |z| z == x;
+    let y = 4;
+    assert!(equal_to_x(y));
+\end{minted}
+
+\textbf{Question}: What's the difference between the closures and the functions?
+
+\visible<2->{
+    A closure is an \textit{anonymous function} that can directly \textit{use variables from the scope} in which it is defined.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures}
+Unlike functions, closures infer input and output types since it's more convenient most of the time.
+
+\begin{minted}[fontsize=\small]{rust}
+    let option = Some(2);
+
+    let x = 3;
+    // explicit types:
+    let new: Option<i32> = option.map(|val: i32| -> i32 {
+        val + x
+    });
+    println!("{:?}", new);  // Some(5)
+
+    let y = 10;
+    // inferred:
+    let new2 = option.map(|val| val * y);
+    println!("{:?}", new2);  // Some(20)
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures and traits}
+Let's try to duplicate \texttt{Option::map} functionality with handcrafted function.
+
+\begin{minted}[fontsize=\small]{rust}
+    fn map<X, Y>(option: Option<X>, transform: ...) -> Option<Y> {
+        match option {
+            Some(x) => Some(transform(x)),
+            None => None,
+        }
+    }
+\end{minted}
+
+We need to fill in the \texttt{...} with something that transforms an \texttt{X} into a \texttt{Y}. What it will be?
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures and traits}
+We want \texttt{transform} to be the callable object. In Rust, when we want to abstract over some property, we use traits!
+
+\begin{minted}[fontsize=\small]{rust}
+    fn map<X, Y, T>(option: Option<X>, transform: T) -> Option<Y>
+        where T: /* the trait */ { ... }
+\end{minted}
+
+Let's design it.
+
+\begin{itemize}
+    \item<2-> Idea: compiler generated structure that implements some trait.
+    \item<3-> Our trait will have only one function.
+    \item<4-> We'll use tuple as input type since we don't have variadics in Rust (and we don't actually need them, at least in this case).
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures and traits}
+\begin{minted}[fontsize=\small]{rust}
+    trait Transform<Input> {
+        type Output;
+        fn transform(/* self */, input: Input) -> Self::Output;
+    }
+\end{minted}
+
+\textbf{Question}: Do we need \texttt{self}, \texttt{\&mut self} or \texttt{\&self} here?
+
+\visible<2->{
+    Since the transformation should be able to incorporate arbitrary information beyond what is contained in \texttt{Input}. Without any \texttt{self} argument, the method would look like \texttt{fn transform(input: Input) -> Self::Output} and the operation could only depend on \texttt{Input} and global variables.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures and traits}
+\textbf{Question}: What do we need exactly: \texttt{self}, \texttt{\&mut self} or \texttt{\&self}?
+
+\visible<2->{
+\begin{table}[]
+\begin{tabular}{|l|l|}
+\hline
+                    & \textbf{User}                                \\ \hline
+\texttt{self}       & Can only call method once                    \\ \hline
+\texttt{\&mut self} & Can call many times, only with unique access \\ \hline
+\texttt{\&self}     & Can call many times, with no restrictions    \\ \hline
+\end{tabular}
+\end{table}
+}
+
+\visible<3->{
+    We usually want to choose the highest row of the table that still allows the consumers to do what they need to do.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures and traits}
+Let's start with \texttt{self}. In summary, our \texttt{map} and its trait look like:
+
+\begin{minted}[fontsize=\small]{rust}
+    trait Transform<Input> {
+        type Output;
+        fn transform(self, input: Input) -> Self::Output;
+    }
+
+    fn map<X, Y, T>(option: Option<X>, transform: T) -> Option<Y>
+        where T: Transform<X, Output = Y>
+    {
+        match option {
+            Some(x) => Some(transform.transform(x)),
+            None => None,
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures and traits}
+\begin{minted}{rust}
+    let option = Some(2);
+    let x = 3;
+    let new: Option<i32> = map(option, Adder { x: x });
+    println!("{:?}", new); // Some(5)
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{\texttt{Fn}, \texttt{FnMut}, \texttt{FnOnce}}
+Rust uses \texttt{Fn}, \texttt{FnMut}, \texttt{FnOnce} traits to unify functions and closures, similar to what we've invented.
+
+\begin{minted}[fontsize=\small]{rust}
+    pub trait FnOnce<Args> {
+        type Output;
+        fn call_once(self, args: Args) -> Self::Output;
+    }
+
+    pub trait FnMut<Args>: FnOnce<Args> {
+        fn call_mut(&mut self, args: Args) -> Self::Output;
+    }
+
+    pub trait Fn<Args>: FnMut<Args> {
+        fn call(&self, args: Args) -> Self::Output;
+    }
+\end{minted}
+
+\visible<2->{
+    Look carefuly as \texttt{self}. Every \texttt{FnMut} closure can implement \texttt{FnOnce} exactly the same way! Same applies to \texttt{Fn} and \texttt{FnMut}.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{Fn}, \texttt{FnMut}, \texttt{FnOnce}}
+The real \texttt{map} looks like this:
+
+\begin{minted}[fontsize=\small]{rust}
+    impl<T> Option<T> {
+        pub fn map<U, F>(self, f: F) -> Option<U>
+        where
+            F: FnOnce(T) -> U,
+        {
+            match self {
+                Some(x) => Some(f(x)),
+                None => None
+            }
+        }
+    }
+\end{minted}
+
+\texttt{FnOnce(T) -> U} is another name for our \texttt{Transform<X, Output = Y>} bound, and \texttt{f(x)} for \texttt{transform.transform(x)}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Returning and accepting closures}
+Since the closure is a compiler-generated type, it's \textbf{non-denotable}, i.e you cannot write its exact type.
+
+\begin{minted}{rust}
+    fn return_closure() -> impl Fn() {
+        || println!("hello world!")
+    }
+\end{minted}
+
+\texttt{Fn}, \texttt{FnMut}, \texttt{FnOnce} are traits, and we can benefit from trait objects here too!
+
+\begin{minted}{rust}
+    let c1 = || {
+        println!("calculating...");
+        42 * 2 - 22
+    };
+    let c2 = || 42;
+    let vec: Vec<&dyn Fn() -> i32> = vec![&c1, &c2];
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{Fn}, \texttt{FnMut}, \texttt{FnOnce}}
+Basically any funtions also implement these traits!
+
+\begin{minted}{rust}
+    fn cast(x: i32) -> i64 {
+        (x + 1) as i64
+    }
+
+    fn func(f: impl FnOnce(i32) -> i64) {
+        println!("f(42) = {}", f(42));
+    }
+
+    fn main() {
+        func(cast)
+    }
+\end{minted}
+
+So, like everything in Rust, operator \texttt{()} is defined by traits (Although you can overload it only in nightly currently).
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{fn}}
+There's also \textit{function pointers} in Rust. It's not a trait, it's an actual \textit{type} that refers to the code, not data. Unlike closures, they cannot capture the environment.
+
+\begin{minted}[fontsize=\small]{rust}
+    fn add_one(x: usize) -> usize { x + 1 }
+
+    let ptr: fn(usize) -> usize = add_one;
+    assert_eq!(ptr(5), 6);
+
+    let clos: fn(usize) -> usize = |x| x + 5;
+    assert_eq!(clos(5), 10);
+
+    // error: mismatched types
+    // let y = 2;
+    // let clos: fn(usize) -> usize = |x| y + x + 5;
+    // assert_eq!(clos(5), 10);
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures: capturing}
+Let's find out how Rust closures decide how to capture the variables.
+
+\begin{minted}[fontsize=\small]{rust}
+    struct T { ... }
+
+    fn by_value(_: T) {}
+    fn by_mut(_: &mut T) {}
+    fn by_ref(_: &T) {}
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Closures: capturing}
+\begin{minted}[fontsize=\small]{rust}
+    let x: T = ...;
+    let mut y: T = ...;
+    let mut z: T = ...;
+
+    let closure = || {
+        by_ref(&x);
+        by_ref(&y);
+        by_ref(&z);
+
+        // Forces `y` and `z` to be at least
+        // captured by `&mut` reference
+        by_mut(&mut y);
+        by_mut(&mut z);
+
+        // Forces `z` to be captured by value
+        by_value(z);
+    };
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures: capturing}
+This is how closure environment will look like:
+
+\begin{minted}[fontsize=\small]{rust}
+    struct Environment<'x, 'y> {
+        x: &'x T,
+        y: &'y mut T,
+        z: T
+    }
+
+    /* impl of FnOnce for Environment */
+
+    let closure = Environment {
+        x: &x,
+        y: &mut y,
+        z: z,
+    };
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures: capturing}
+Since this closure implements \texttt{FnOnce}, it cannot be called twice:
+
+\begin{minted}{rust}
+    // Ok
+    closure();
+    // error: moved due to previous call
+    // closure();
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Closures: capturing}
+What if you need to move out a closure from the scope? In this case, you need to move all the variables even if it's enough to have a shared reference.
+
+\begin{minted}{rust}
+    // Returns a function that adds a fixed number
+    // to the argument. Reminds of Higher Order Functions
+    // from functional programming!
+    fn make_adder(x: i32) -> impl Fn(i32) -> i32 {
+        |y| x + y
+    }
+    fn main() {
+        let f = make_adder(3);
+        println!("{}", f(1));  // 4
+        println!("{}", f(10));  // 13
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures: capturing}
+\begin{minted}{rust}
+error[E0597]: `x` does not live long enough
+ --> src/main.rs:2:9
+  |
+2 |     |y| x + y
+  |     --- ^ borrowed value does not live long enough
+  |     |
+  |     value captured here
+3 | }
+  |  -
+  |  |
+  |  `x` dropped here while still borrowed
+  |  borrow later used here
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures: capturing}
+Let's use \texttt{move} keyword to tell Rust we need to capture by value:
+
+\begin{minted}{rust}
+    fn make_adder(x: i32) -> impl Fn(i32) -> i32 {
+        // Compiles just fine!
+        move |y| x + y
+    }
+
+    fn main() {
+        let f = make_adder(3);
+        println!("{}", f(1));  // 4
+        println!("{}", f(10));  // 13
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures: capturing}
+Going back to previous example, the closure with \texttt{move} keyword will capture all variables by value:
+
+\begin{minted}[fontsize=\small]{rust}
+    let closure = move || {
+        by_ref(&x);
+        by_ref(&y);
+        by_ref(&z);
+
+        // Forces `y` and `z` to be at least
+        // captured by `&mut` reference
+        by_mut(&mut y);
+        by_mut(&mut z);
+
+        // Forces `z` to be captured by value
+        by_value(z);
+    };
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures: capturing}
+\begin{minted}{rust}
+    struct Environment {
+        x: T,
+        y: T,
+        z: T,
+    }
+\end{minted}
+
+In Rust, there are no fine-grained capture lists like in C++11. \textit{But do we need it}? In practice, we don't (at least the lecturer doesn't know good examples).
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Closure type}
+Every closure have \textbf{distinct type}. This implies that in this example \texttt{id0}, \texttt{id1}, \texttt{id2} and \texttt{id3} have \textbf{different types}.
+
+\begin{minted}[fontsize=\small]{rust}
+    fn id0(x: u64) -> u64 { x }
+    fn id1(x: u64) -> u64 { x }
+    fn main() {
+        let id2 = || 1;
+        let id3 = || 1;
+    }
+\end{minted}
+
+And this code won't compile:
+
+\begin{minted}[fontsize=\small]{rust}
+    fn make_closure(n: u64) -> impl Fn() -> u64 {
+        move || n
+    }
+
+    vec![make_closure(1), make_closure(2)];
+    vec![(|| 1), (|| 1)];  // Error: mismatched types
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Closures and optimizations}
+\begin{itemize}
+    \item<1-> We create a structure for the closure, do some moves... It must be expensive!
+    \item<2-> Actually, the compiler knows a lot about our code and optimizes it with ease. Most closure calls are inlined and in binary is the same as code without closure.
+    \item<3-> Zero cost abstraction!
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Lambdas and C++}
+\begin{itemize}
+    \item<1-> In C++, lambdas work in pretty the same way as closures.
+    \item<2-> The bad thing is \texttt{std::function}. It is a general-purpose polymorphic function wrapper, type erasure object, the only way in language to store lambda.
+    \item<3-> Inside, we create a heap allocation, and it's not efficient (Anyway, there's SOO that optimizes it, but not every time).
+    \item<4-> At the same time, Rust's closures are located in stack, which means great performance comparing to C++.
+    \item<5-> If you want \texttt{std::function}, use \texttt{Box<dyn Fn(...) -> ...>} (or other needed trait).
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Intro to Metaprogramming}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Metaprogramming}
+First of all, what is Metaprogramming?
+
+\visible<2->{
+    Metaprogramming is a programming technique that means \textit{``programs that manipulate programs''}. It has quite a broad meaning, but we don't need to understand them all. Instead, we'll focus on definition \textit{``code that generates code''}.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Metaprogramming}
+When do we need metaprogramming?
+
+\begin{itemize}
+    \item<2-> Optimizations: precalculation of any values, tables...
+    \item<3-> Embedding data into source code of the program.
+    \item<4-> Generating boilerplate code.
+    \item<5-> Implementing DSLs (Domain-specific language).
+    \item<5-> And much more!
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{C++ and Metaprogramming}
+C++ has two main approaches to metaprogramming: template metaprogramming and \texttt{\#define} directive.
+
+\begin{itemize}
+    \item<2-> Templates in C++ are turing-complete, and that implies you can write any program in the \textit{mathematical} sense. Template metaprogramming can be seen as some jedi technique, hard to learn, and extremely rarely used in practice.
+    \item<3-> Old \texttt{\#define} preprocessor directive was inherited from C. It just replaces all of the appearances of the identifier, so it's not a very powerful tool. Since the preprocessor runs before lexical analysis, it means it can arbitrarily break your code compilation.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Rust and metaprogramming}
+In Rust, we have one main approach to metaprogramming: \textbf{macros}.
+
+\begin{itemize}
+    \item<2-> Macros are \textbf{extremely} powerful. They enable you to read arbitrary tokens and translate them into arbitrary Rust code!
+    \item<3-> Moreover, macros can read files, send requests to databases, and so on, since it is Rust code that generates Rust code.
+\end{itemize}
+
+\visible<3->{
+    Actually, you can even do some magic with traits and objects and emulate C++ template metaprogramming, since traits are turing-complete too! However, prefer macros instead, they're way easier.\footnote{\href{https://habr.com/en/post/578198/}{(Russian) How to write FizzBuzz on the interview}}\footnote{\href{https://sdleffler.github.io/RustTypeSystemTuringComplete/}{Rust's Type System is Turing-Complete}}
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Declarative macros}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Declarative macros}
+Before we continue, let's check the \texttt{json} macro from crate serde!
+
+\begin{minted}{rust}
+    let value = json!({
+        "code": 200,
+        "success": true,
+        "payload": {
+            "features": [
+                "serde",
+                "json"
+            ]
+        }
+    });
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Declarative macros}
+Let's start with the easiest example. Suppose we want to create a vector from the list of arguments. If we do this by hand, the result will be as follows:
+
+\begin{minted}{rust}
+    let mut a = Vec::new();
+    a.push(1);
+    a.push(1);
+    a.push(1);
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Declarative macros}
+But we already know there's a macro that is doing the same!
+
+\begin{minted}{rust}
+    let a = vec![1; 3];
+    let a = vec![1, 1, 1];
+\end{minted}
+
+We'll implement it and call \texttt{create\_vec}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! create_vec {
+        [$value:expr; $count:expr] => {{
+            let mut vec = ::std::vec::Vec::new();
+            vec.resize($count, $value);
+            vec
+        }};
+        [$($value:expr),*] => {{
+            let mut vec = ::std::vec::Vec::new();
+            $(vec.push($value);)*
+            vec
+        }};
+    }
+\end{minted}
+
+\texttt{macro\_rules!} is also a macro, special for compiler. It means ``I'm defining a macro'', pretty the same as \texttt{fn} keyword.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! create_vec {
+        [$value:expr; $count:expr] => {{
+            /* some code */
+        }};
+        [$($value:expr),*] => {{
+            /* some code */
+        }};
+    }
+\end{minted}
+
+Our \texttt{create\_vec} macro works quite like the same as matching an \texttt{enum}. We check what arguments are given and match them sequentally with patterns on the left side, called \textit{matchers}. Then, we insert code generated on the right side, called \textit{transcribers}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! create_vec {
+        [$value:expr; $count:expr] => {{
+            /* code */
+        }};
+        [$($value:expr),*] => {{
+            /* code */
+        }};
+    }
+\end{minted}
+
+Arguments (called \textit{meta-variables}) of macro are specified by \texttt{\$} symbol. After the colon, we put the type of the argument.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+Possible types of meta-variables are:
+
+\begin{itemize}
+    \item \texttt{expr} - an expression.
+    \item \texttt{stmt} - a statement.
+    \item \texttt{ty} - a type.
+    \item \texttt{ident} - an identifier (or keyword).
+    \item \texttt{block} - block in \texttt{\{\}}.
+    \item \texttt{tt} - token tree \texttt{()}, \texttt{[]} or \texttt{\{\}}.
+    \item \texttt{literal} - literal.
+    \item And much more!
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{\texttt{macro\_rules}}
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! other_create_vec {
+        /* variant */
+        [$($value:expr),*] => {{
+            /* code */
+        }};
+    }
+\end{minted}
+
+To repeat some pattern multiple times, there is ``special'' syntaxes like \texttt{\$()*}, \texttt{\$()+} and \texttt{\$()?}. They all mean ``sequence of patterns inside'' and called \textit{repetitions}.
+
+\begin{itemize}
+    \item \texttt{*} means ``zero or more times''.
+    \item \texttt{+} means ``one or more times''.
+    \item \texttt{?} means ``zero or one time''.
+\end{itemize}
+
+\visible<2->{
+    After \texttt{\$()} and before repetition qualifier, you can write a separator (or don't choose a separator). Rust allows you not to write it at the end, just like, for instance, in definition of \texttt{enum}.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+Just to understand it a bit better, let's write some strange looking macro.
+
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! example {
+        {$($value1:expr),* => $($value2:expr),*} => {};
+    }
+
+    // Note that we've used '{}' on definition but
+    // in this line 'example' is used with []!
+    example![1, 2, 3 => 3, 2];
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+Just to understand it a bit better, let's write some strange looking macro.
+
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! example {
+        {($($value1:expr),* => $($value2:expr),*)} => {};
+    }
+
+    example![(1, 2, 3 => 3, 2)];
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+Just to understand it a bit better, let's write an example macro.
+
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! example {
+        {$(($($value1:expr),* => $($value2:expr),*)),*} => {{}};
+    }
+
+    example![(1, 2, 3 => 3 + 3, 2), ("hello" => [1, 2, 3], (22, 42))];
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules}}
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! create_vec {
+        [$value:expr; $count:expr] => {{
+            let mut vec = ::std::vec::Vec::new();
+            vec.resize($count, $value);
+            vec
+        }};
+        // Note this example!
+        [] => { ::std::vec::Vec::new() };
+        [$($value:expr),*] => {{
+            let mut vec = ::std::vec::Vec::new();
+            $(vec.push($value);)*
+            vec
+        }};
+    }
+\end{minted}
+
+We use first \texttt{\{\}} to mark the beginning of macro block with code. The second is needed to show that we'll use multiple statements inside the block, and this two are actually inserted in the place of macro invocation since Rust wants only one expression after macro is expanded.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! create_vec {
+        [$value:expr; $count:expr] => {{
+            let mut vec = ::std::vec::Vec::new();
+            /* code */
+        }};
+        /* variant */
+    }
+\end{minted}
+
+We have to use a fully specified type for a \texttt{Vec} because our macro is actually placed in the place where it's used.
+
+\begin{itemize}
+    \item<2-> The \texttt{::} means ``from list of imported crates''. If \texttt{std} is not imported, we'll receive an error.
+    \item<3-> We can also use \texttt{\$crate} pattern: for instance, if our crate is called \texttt{example}, the name \texttt{\$crate::module::Example} will change to \texttt{example::module::Example}.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! new_s {
+        [] => { nested::S {} };
+    }
+    pub mod example {
+        pub mod nested {
+            pub struct S;
+        }
+        pub fn test() -> nested::S {
+            new_s!()
+        }
+    }
+
+    assert_eq!(vec![1; 3], create_vec![1; 3]);
+    assert_eq!(vec![1, 1, 1], create_vec![1, 1, 1]);
+    example::test();
+    // error: use of undeclared crate or module `nested`
+    // new_s!();
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! create_vec {
+        [$value:expr; $count:expr] => {{
+            let mut vec = ::std::vec::Vec::new();
+            vec.resize($count, $value);
+            vec
+        }};
+        [$($value:expr),*] => {{
+            let mut vec = ::std::vec::Vec::new();
+            $(vec.push($value);)*
+            vec
+        }};
+    }
+\end{minted}
+
+Inside code, we can insert our meta-variables by writing \texttt{\$META\_VAR\_NAME}. If we want to expand variadic pattern, we use \texttt{\$()*}, \texttt{\$()+} or \texttt{\$()?}. This forces pattern to expand exactly zero or more times, more than zero times or not more than one time, or you'll get error.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! create_vec {
+        [$($value:expr),*] => {{
+            let mut vec = ::std::vec::Vec::new();
+            $(vec.push($value);)*
+            vec
+        }};
+    }
+\end{minted}
+
+You can see that this macro will expand to the series of pushes, and it's not effective, since we'll reallocate multiple times. As in many metaprogramming tools, you cannot just get the size of the \texttt{\$value}, you need to calculate it.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! count {
+        () => (0usize);
+        ($x:tt $($xs:tt)*) => (1usize + count!($($xs)*));
+    }
+\end{minted}
+
+To solve this, we'll create a macro that returns 0 when there's no arguments and \texttt{1 + count(\$tail)} when there's more arguments.
+
+Note that our macro is recursive!
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! create_vec {
+        [$($value:expr),*] => {{
+            let mut vec = ::std::vec::Vec::with_capacity(
+                count!($($value)*)
+            );
+            $(vec.push($value);)*
+            vec
+        }};
+    }
+\end{minted}
+
+To solve this, we'll create a macro that returns 0 when there's no arguments and \texttt{1 + count(\$tail)} when there's more arguments.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+\textbf{Question}: Do we have any limits on macro recursion?
+
+\visible<2->{
+    Yes. If not, user will see strange compiler segmentation faults. To extend the limit, use \texttt{recursion\_limit} attribute:
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+\textbf{Question}: Do we have any limits on macro recursion?
+
+Yes. To extend the limit, use \texttt{recursion\_limit} attribute:
+
+\begin{minted}{rust}
+    #![recursion_limit = "300"]
+    macro_rules! count {
+        () => (0usize);
+        ($x:tt $($xs:tt)*) => (1usize + count!($($xs)*));
+    }
+
+    // This will fail without recursion_limit!
+    count!(0 1 2 /* ... */ 254 255)
+\end{minted}
+
+The default value of \texttt{recursion\_limit} attribute is 128. Please note that this attribute applies to all compile-time recursive operations, including dereference and \texttt{const} functions.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{cargo-expand}}
+Macros are quite difficult to write and debug. One of the tools that can help you with that is \texttt{expand}, installable by \texttt{cargo install cargo-expand}. If we use \texttt{cargo expand}, the following call:
+
+\begin{minted}{rust}
+    count!(0 1 2 3 4);
+\end{minted}
+
+Expands to:
+
+\begin{minted}[fontsize=\small]{rust}
+    1usize + (1usize + (1usize + (1usize + (1usize + 0usize))))
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+Macro are so powerful that you can write a lot of stuff inside!
+
+\begin{minted}[fontsize=\small]{rust}
+    macro_rules! funny {
+        [sentence in English with value $value:expr] => {{
+            println!("wow, the value is {}!", $value);
+        }};
+    }
+
+    funny![sentence in English with value 42];
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{macro\_rules!}}
+Of course, there's some limitations on syntax. For instance, you cannot use \texttt{|} as a separator after \texttt{expr} since Rust actually builds AST before macro expansion, and \texttt{|} is an operator, therefore compiler won't know where is separator and where is next expression.
+
+The precise rules are not the material of the lecture.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Macros hygiene}
+Macros are \textit{hygienic}. That means what is written in macro won't affect code in the call site. For instance, \texttt{\#define} allows us to make the following mistake:
+
+\begin{minted}{cpp}
+    #define FIVE(value) (value * 5)
+    // Fails!
+    // assert(FIVE(2 + 3) == 25);
+\end{minted}
+
+This happens because \texttt{\#define} is not hygienic. In Rust:
+
+\begin{minted}{rust}
+    macro_rules! five_times {
+        ($x:expr) => (5 * $x);
+    }
+    // Works just fine!
+    assert_eq!(25, five_times!(2 + 3));
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Macros hygiene}
+When we say Rust macros are hygienic, we mean that a declarative macro (generally) cannot affect variables that aren’t explicitly passed to it.
+
+\begin{minted}{rust}
+    macro_rules! let_foo {
+        ($x:expr) => {
+            let foo = $x; }
+    }
+    let foo = 1;
+    // expands to let foo = 2;
+    let_foo!(2);
+    // ...But instead, the compiler will even complain
+    // that the 'let foo' in the macro is an unused variable!
+    assert_eq!(foo, 1);
+\end{minted}
+
+You can, most of the time, think of macro identifiers as existing in their own universe that is separate from that of the code they expand into.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Macros hygiene}
+This hygienic separation does not apply beyond variable identifiers. Declarative macros do share a namespace for types, modules, and functions with the call site.
+
+\visible<2->{
+    This means your macro can define new functions that can be called in the invoking scope, add new implementations to a type defined elsewhere (and not passed in), introduce a new module that can then be accessed where the macro was invoked, and so on.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Macros hygiene}
+You can explicitly choose to share identifiers between a macro and its caller if you specifically want the macro to affect a variable in the caller’s scope.
+
+\begin{minted}{rust}
+    macro_rules! please_set {
+        ($i:ident, $x:expr) => {
+            $i = $x;
+        }
+    }
+    let mut x = 1;
+    please_set!(x, x + 1);
+    assert_eq!(x, 2);
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Macros visibility}
+Unlike pretty much everything else in Rust, declarative macros only exist in the source code after they are declared. If you try to use a macro that you define further down in the file, this will not work!
+
+\begin{minted}{rust}
+    // Does not compile!
+    fn main() {
+        count!(0 1 2 3 4 5);
+    }
+
+    macro_rules! count {
+        /* macro */
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Macros visibility}
+Macros are not visible in modules and \texttt{pub} keyword does not affect them. If you want to make your macro visible for users, use \texttt{\#[macro\_export]} on macro: it's pretty the same as putting macro in the root of the crate and marking it as \texttt{pub}
+
+\begin{minted}[fontsize=\small]{rust}
+    mod a {
+        mod b {
+            // Now visible to the end user
+            #[macro_export]
+            macro_rules! count {
+                () => (0usize);
+                ($x:tt $($xs:tt)*) => (1usize + count!($($xs)*));
+            }
+        }
+    }
+    fn main() {
+        count!(0 1 2 3 4 5);
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Procedural macros}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\frametitle{Procedural macros}
+\begin{center}
+    \includegraphics[height=7.5cm,keepaspectratio]{images/yo-dawg.jpeg}
+\end{center}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros}
+Procedural macros is a Rust code which accepts token stream as an input and outputs Rust code.
+
+This is how \texttt{yew} crate (wow, React on Rust!) generates \texttt{html} by using procedural macros:
+
+\begin{minted}{rust}
+    html! {
+        <div>
+            <div class="panel">
+                { "Hello, World!" }
+            </div>
+        </div>
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros}
+There are 3 types of procedural macros:
+
+\begin{itemize}
+    \item<1-> Function-like macros - \texttt{custom!(...)}. Invoked just like declarative macros, but are much more powerful!
+    \item<2-> Derive macros - \texttt{\#[derive(CustomDerive)]}. Accepts \texttt{struct}, \texttt{enum} or \texttt{union} and produces some code depending on input, \textit{adding} it to the source near the target. There's also \textit{derive helper attributes} that exist to give clue to the derive macro.
+    \item<3-> Attribute macros - \texttt{\#[CustomAttribute]}. They define new outer attributes which can be attached to items. They are used to transform the item.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros}
+Procedural macro must be written in special crate:
+
+\begin{minted}{toml}
+    [lib]
+    proc-macro = true
+\end{minted}
+
+An example of the simple, function-like procedural macro:
+
+\begin{minted}[fontsize=\small]{rust}
+    extern crate proc_macro;
+    use proc_macro::TokenStream;
+
+    #[proc_macro]
+    pub fn make_answer(_item: TokenStream) -> TokenStream {
+        "fn answer() -> u32 { 42 }".parse().unwrap()
+    }
+
+    // adds 'fn answer() -> u32 { 42 }'
+    // to the code!
+    make_answer!();
+\end{minted}
+
+Where \texttt{proc\_macro} is a compiler-provided crate. It provides types required for writing procedural macros and facilities to make it easier.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros hygiene}
+As you can see, procedural macros are \textit{unhygienic}. This means they behave as if the output token stream was simply written inline to the code it's next to.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{TokenStream}}
+First of all, what is \texttt{TokenStream}?
+
+\texttt{TokenStream} is a sequence of \texttt{TokenTree}.
+
+\begin{minted}{rust}
+    struct TokenStream(Vec<TokenTree>);
+
+    pub enum TokenTree {
+        Ident(Ident),  // An identifier
+        Punct(Punct),  // A punctuation
+        Literal(Literal),  // A literal
+        Group(Group),  // An another TokenSteam inside braces
+    }
+\end{minted}
+
+As you can see, any input to procedural macro is \textit{balanced bracket sequence}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{TokenStream}}
+\textbf{Question}: What \texttt{TokenStream} this line produces?
+
+\begin{minted}{rust}
+    let r = five_times!(2 + 3);
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{TokenStream}}
+\textbf{Question}: What \texttt{TokenStream} this line produces?
+
+\begin{minted}{rust}
+    let r = five_times!(2 + 3);
+\end{minted}
+
+The output \texttt{TokenStream}:
+
+\begin{minted}[fontsize=\small]{rust}
+    Ident("let"),
+    Ident("r"),
+    Punct("="),
+    Group(
+        Literal(5),
+        Punct("*"),
+        Group(
+            Literal(2),
+            Punct("+"),
+            Literal(3),
+        )
+    )
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{TokenStream}}
+Let's check use this in real procedural macro!
+
+\begin{minted}{rust}
+    #[proc_macro]
+    pub fn foo(body: TokenStream) -> TokenStream {
+        for tt in body.into_iter() {
+            match tt {
+                TokenTree::Ident(_) => println!("Ident"),
+                TokenTree::Punct(_) => println!("Punct"),
+                TokenTree::Literal(_) => println!("Literal"),
+                _ => {}
+            }
+        }
+        return TokenStream::new();
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{TokenStream}}
+\begin{minted}{rust}
+    foo! {
+        bar = "123";
+    }
+\end{minted}
+
+The output:
+
+\begin{minted}{rust}
+    Ident
+    Punct
+    Literal
+    Punct
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{TokenStream}}
+\texttt{Group} variant is another \texttt{TokenStream} inside the braces.
+
+\begin{minted}{rust}
+    foo!( foo { 2 + 2 } bar );
+\end{minted}
+
+\begin{itemize}
+    \item<2-> \texttt{foo} is an \texttt{Ident("foo")}.
+    \item<3-> \texttt{bar} is an \texttt{Ident("bar")}.
+    \item<4-> \texttt{\{2 + 2\}} is a \texttt{Group("\{\}", TokenSteam)}, where \texttt{TokenStream} consists of \texttt{Literal("2")}, \texttt{Punct("+")} and \texttt{Literal("2")},
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{TokenStream}}
+\begin{minted}{rust}
+    // 1, 1i32, 1.2, 1.2e-1f64, "foo", r#"bar"#, 'a', b'a'
+    struct Literal(String, Span);
+
+    // foo, r#foo, struct, _
+    struct Ident(String, Span);
+
+    // . , : # $ + -
+    struct Punct(char, Spacing, Span);
+
+    // What is that?
+    enum Spacing { Alone, Joint }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{Spacing}}
+What is a \texttt{Spacing}?
+
+\begin{minted}{rust}
+    struct Punct(char, Spacing, Span);
+    //                 ^^^^^^^ - The usage
+    enum Spacing { Alone, Joint }
+
+    foo! { foo::bar }
+    //        ^^
+\end{minted}
+
+The first \texttt{:} is \texttt{Punct(":", Alone)}, and the second is \texttt{Punct(":", Joint)}.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{syn} crate}
+It's not very convenient to parse Rust code as a \texttt{TokenStream}. To solve this problem, there exists \texttt{syn} crate which parses \texttt{TokenStream} assuming that the input is a valid Rust code.
+
+Let's use it to write our first derive macro! We'll also use a helper attribute to show to what field we want dereference.
+
+\begin{minted}{rust}
+    #[derive(Deref)]
+    struct IntWrapper {
+        #[deref]
+        inner: i32,
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{syn} crate}
+\begin{minted}[fontsize=\small]{rust}
+#[proc_macro_derive(Deref, attributes(deref))]
+pub fn derive_deref(stream: TokenStream) -> TokenStream {
+    let input: DeriveInput = parse_macro_input!(stream);
+    let struct_ = match input.data {
+        syn::Data::Struct(struct_) => struct_,
+        _ => panic!("only structs are supported" ),
+    };
+    let named_fields = match struct_.fields {
+        syn::Fields::Named(fields) => fields.named,
+        _ => panic!("only structs with named fields are supported"),
+    };
+
+    /* 1 */
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{syn} crate}
+\begin{minted}[fontsize=\small]{rust}
+    /* 1 */
+
+    let deref_field = named_fields
+    .into_iter()
+    .filter(|field| {
+        field.attrs.iter().find(|attr| {
+            attr.path.segments.first()
+                .map_or(false, |seg| seg.ident == "deref")
+            }
+        ).is_some()
+    })
+    .next()
+    .expect("field with #[deref] is not found" );
+
+    /* 2 */
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{syn} crate}
+\begin{minted}[fontsize=\small]{rust}
+    /* 2 */
+
+    format!(
+        r#"impl ::std::ops::Deref for {} {{
+            type Target = {};
+            fn deref(&self) -> &Self::Target {{
+            &self.{} }}
+        }}"#,
+        input.ident,
+        deref_field.ty.to_token_stream(),
+        deref_field.ident.unwrap(),
+    ).parse().unwrap()
+}
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{syn} crate}
+This macro is not perfect and does not cover a lot of cases, for instance:
+
+\begin{minted}{rust}
+    struct Wrapper<T> {
+        inner: T,
+    }
+
+    struct Wrapper<T>
+    where
+        T: MyTrait
+    {
+        inner: T,
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{quote} crate}
+Actually, \texttt{format!} is not the best way to return our \texttt{impl}. Instead, we can use crate \texttt{quote} that enables us to write the Rust code to the output with pleasure.
+
+\begin{minted}{rust}
+        /* 2 */
+        let output = quote! {
+            impl ::std::ops::Deref for #ident {
+            type Target = #target;
+            fn deref(&self) -> &Self::Target {
+                    &self.#field_ident
+                }
+            }
+        };
+        output.into()
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{Span}}
+What is a \texttt{Span}?
+
+\texttt{Span} how the compiler ties generated code back to the source code that generated that code.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{Span}}
+\texttt{Span} how the compiler ties generated code back to the source code that generated that code.
+
+We've written a macro that depends on correctness of input. For instance, user can write multiple \texttt{\#[deref]}. Technically, the compiler error occurs \textit{inside} the macro, and user won't understand what's wrong.
+
+\begin{minted}[fontsize=\small]{rust}
+    #[derive(Deref)]
+    struct IntWrapper {
+        #[deref]
+        inner1: i32,
+        #[deref]
+        inner2: i32
+    }
+\end{minted}
+
+\visible<2->{
+    But we'd like the compiler to point the user at the \texttt{\#[deref]} in their code, and that's what spans let us do.
+}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{Span}}
+\begin{minted}[fontsize=\small]{rust}
+if deref_fields.len() > 1 {
+    let mut error = quote! {
+        compile_error!("found >= 2 fields with #[deref]");
+    };
+    error.extend(quote_spanned! {
+        deref_fields[0].span() => {
+            compile_error!("the first #[deref] field");
+        }
+    });
+    error.extend(quote_spanned! {
+        deref_fields[1].span() => {
+            compile_error!("the second #[deref] field");
+        }
+    });
+    return error.into();
+}
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros: \texttt{Span}}
+\begin{minted}[fontsize=\small]{rust}
+error: found >= 2 fields with #[deref]
+  --> src/main.rs:10:10
+10 | #[derive(Deref)]
+   |          ^^^^^
+error: the first #[deref] field
+  --> src/main.rs:12:5
+12 | #[deref]
+   | ^
+error: the second #[deref] field
+  --> src/main.rs:14:5
+   |
+14 | #[deref]
+   | ^
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{compile\_error!}}
+\texttt{compile\_error!} emits an error when the code is \textit{compiled}. As you can see, we write multiple \texttt{compile\_error!} to the output, and when user code compiles, the user-friendly error occures.
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros hygiene}
+The hygiene of macros output code depends on the \texttt{Span} of output code:
+
+\begin{itemize}
+    \item \texttt{Span::call\_site()} - the name will work just like it was in the user code, i.e call site (the default value).
+    \item \texttt{Span::mixed\_site()} - the same as hygiene of declarative macros.
+    \item \texttt{Span::def\_site()} - the name will be seen only in file with macro (only in nightly).
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Procedural macros hygiene}
+For instance, this code will behave just like it was in the user code:
+
+\begin{minted}{rust}
+    #[proc_macro]
+    pub fn define_foo(_stream: TokenStream) -> TokenStream {
+        let output = quote_spanned! {
+            Span::call_site() => let foo = "foo";
+        };
+        output.into()
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[c]
+\centering\Huge\textbf{Macros from standard library}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Conditional compilation}
+The conditional compilation is also implemented on macros:
+
+\begin{minted}[fontsize=\small]{rust}
+    #[cfg(unix)]
+    pub fn bytes2path(bytes: &[u8]) -> CargoResult<PathBuf> {
+        use std::os::unix::prelude::*;
+        Ok(PathBuf::from(OsStr::from_bytes(bytes)))
+    }
+
+    #[cfg(windows)]
+    pub fn bytes2path(bytes: &[u8]) -> CargoResult<PathBuf> {
+        use std::str;
+        match str::from_utf8(bytes) {
+            Ok(s) => Ok(PathBuf::from(s)),
+            Err(..) => Err(failure::format_err!(
+                "invalid non-unicode path"
+            )),
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile,c]
+\frametitle{Conditional compilation}
+The conditional compilation is also implemented on macros:
+
+\begin{minted}[fontsize=\small]{rust}
+    #[cfg(unix)]
+    pub fn bytes2path(bytes: &[u8]) -> CargoResult<PathBuf> {
+        use std::os::unix::prelude::*;
+        Ok(PathBuf::from(OsStr::from_bytes(bytes)))
+    }
+
+    #[cfg(windows)]
+    pub fn bytes2path(bytes: &[u8]) -> CargoResult<PathBuf> {
+        use std::str;
+        match str::from_utf8(bytes) {
+            Ok(s) => Ok(PathBuf::from(s)),
+            Err(..) => Err(failure::format_err!(
+                "invalid non-unicode path"
+            )),
+        }
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Conditional compilation}
+The \texttt{cfg!} macro evaluates boolean combinations of configuration flags at compile-time.
+
+When you use it as \textit{attribute macro}, it will remove the code conditionally. When you use it as a \textit{function-like macro}, it will just evaluate the condition without removing the code.
+
+\begin{minted}{rust}
+    let my_directory = if cfg!(windows) {
+        "windows-specific-directory"
+    } else {
+        "unix-directory"
+    };
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Conditional compilation}
+You've already seen this pattern in homeworks:
+
+\begin{minted}{rust}
+    #[cfg(test)]
+    mod tests {
+        use some_lib::test_specific_function;
+        use super::*;
+
+        #[test]
+        fn test_foo() { ... }
+    }
+\end{minted}
+
+\begin{itemize}
+    \item \texttt{\#[test]} will never exist in the binary.
+    \item \texttt{\#[cfg(test)]} groups unit-tests and removes unused imports.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Conditional compilation}
+Macros \texttt{env!} and \texttt{option\_env!} allows us to get environment variables at compile time.
+
+\begin{minted}{rust}
+    fn main() {
+        let compile_time_path = env!("PATH");
+        println!(
+            "PATH at *compile* time:\n{}",
+            compile_time_path,
+        );
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{stringify!}}
+Macro \texttt{stringify!} stringifies its arguments:
+
+\begin{minted}{rust}
+    let one_plus_one = stringify!(1 + 1);
+    assert_eq!(one_plus_one, "1 + 1");
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{\texttt{include\_str!} and \texttt{include\_bytes!}}
+Macros \texttt{include\_str!} and \texttt{include\_bytes!} include file directly to our binary as \texttt{\&str} or \texttt{\&[u8]}:
+
+\begin{minted}{rust}
+    fn main() {
+        let my_str = include_str!("spanish.in");
+        assert_eq!(my_str, "adiós\n");
+        print!("{}", my_str);
+    }
+\end{minted}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Attributes}
+Rust contains a lot of atttibute macros, useful for your code.\footnote{\href{https://doc.rust-lang.org/reference/attributes.html}{Attributes - The Rust Reference}}
+
+\begin{itemize}
+    \item \texttt{allow}, \texttt{warn}, \texttt{deny}, \texttt{forbid} — Alters the default lint level.
+    \item \texttt{deprecated} — Generates deprecation notices.
+    \item \texttt{must\_use} — Generates a lint for unused values.
+    \item \texttt{inline} — Hint to inline code.
+    \item \texttt{cold} — Hint that a function is unlikely to be called.
+    \item \texttt{no\_std} - Removes std from the prelude.
+    \item And much more!
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\begin{frame}[fragile]
+\frametitle{Conclusion}
+\begin{itemize}
+    \item We studied Rust closures and found their unique features.
+    \item Studied declarative and procedural macros.
+    \item Highlighted their weak and strong sides.
+    \item And looked at standard library macros.
+\end{itemize}
+\end{frame}
+
+% ----------------------------------------------------------------- %
+
+\end{document}

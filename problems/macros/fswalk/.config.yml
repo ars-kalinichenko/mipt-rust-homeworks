@@ -1,0 +1,11 @@
+toolchain: stable
+allowed-patterns:
+  - src/walker.rs
+  - src/handle.rs
+steps:
+  linters:
+    - forbid-unsafe
+    - cargo-fmt
+    - cargo-clippy
+  testing:
+    - cargo-test

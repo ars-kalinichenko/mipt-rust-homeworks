@@ -1,0 +1,11 @@
+[package]
+name = "snapshot"
+version = "0.1.0"
+authors = ["Sergei Fomin <sergio-dna@yandex.ru>"]
+edition = "2021"
+
+[dependencies]
+thiserror = "1.0"
+
+[features]
+test-lifetime = []

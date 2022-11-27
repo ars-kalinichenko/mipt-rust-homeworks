@@ -1,0 +1,17 @@
+[package]
+name = "mini-frunk"
+version = "0.1.0"
+authors = ["Alexander Stanovoy <alex.stanovoy@gmail.com>"]
+edition = "2021"
+
+[dependencies]
+mini-frunk-core = { path = "./core" }
+mini-frunk-derive = { path = "./derives" }
+
+[dev-dependencies]
+static_assertions = ">= 1.1.0"
+
+[features]
+compilation-fail-generic = []
+compilation-fail-labelled = []
+compilation-fail-transmogrify = []

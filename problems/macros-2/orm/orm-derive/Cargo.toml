@@ -1,0 +1,12 @@
+[package]
+name = "orm-derive"
+version = "0.1.0"
+authors = ["Sergei Fomin <sergio-dna@yandex.ru>"]
+edition = "2021"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = ">= 1.0.18"
+syn = { version = ">= 1.0.91", features = ["full"] }
