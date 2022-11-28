@@ -12,7 +12,6 @@ jobs:
         with:
           toolchain: nightly
       - name: Test PyTest test import
-        uses: ./
         with:
           check_name: Example Pytest Report
           report_paths: test_results/python/report.xml
