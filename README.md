@@ -1,0 +1,1 @@
+[![Test in CI](https://github.com/ars-kalinichenko/mipt-rust-homeworks/actions/workflows/test.yml/badge.svg?event=push)](https://github.com/ars-kalinichenko/mipt-rust-homeworks/actions/workflows/test.yml)
