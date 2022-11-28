@@ -13,5 +13,3 @@ jobs:
           toolchain: nightly
       - name: Test Summary
         run: cargo test -- -Z unstable-options --format json --report-time | cargo2junit > results.xml
-        with:
-          report_paths: results.xml
