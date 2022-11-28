@@ -4,7 +4,7 @@ name: Test in CI
 
 jobs:
   build_and_test:
-    name: [MIPT] Rust course homeworks
+    name: Rust course homeworks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
