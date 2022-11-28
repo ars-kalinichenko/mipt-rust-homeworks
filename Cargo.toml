@@ -2,14 +2,4 @@
 members = [
     # Problems
     "problems/intro/combinations",
-    "problems/intro/conway",
-    "problems/intro/min-queue",
-
-    # Tools
-    "tools/rover",
-
-    # Additional
-    "lectures/lecture-04/code/example",
-    "lectures/lecture-08/code/echo",
-    "lectures/lecture-08/code/simple-runtime",
 ]
