@@ -1,6 +1,6 @@
 [![Test in CI](https://github.com/ars-kalinichenko/mipt-rust-homeworks/actions/workflows/test.yml/badge.svg?event=push)](https://github.com/ars-kalinichenko/mipt-rust-homeworks/actions/workflows/test.yml)
 
-Hello! This is homework for the Rust course.
+Hello! This is homework for the Rust [course](https://youtube.com/playlist?list=PL4_hYwCyhAvbeLzi699gqMUA4UaPkcdmJ).
 
 ## Technical information
 - Rust version: 1.59.0
