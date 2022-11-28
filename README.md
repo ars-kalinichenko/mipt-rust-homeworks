@@ -5,6 +5,7 @@ Hello! This is homework for the Rust [course](https://youtube.com/playlist?list=
 ## Technical information
 - Rust version: 1.59.0
 - Toolchain: nightly
+- [Repo](https://gitlab.com/alex.stanovoy/mipt-rust) with tasks
 
 ## Progress
 ![](https://geps.dev/progress/25)
