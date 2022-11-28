@@ -4,7 +4,7 @@ name: Test in CI
 
 jobs:
   build_and_test:
-    name: Mipt Rust course homeworks
+    name: [MIPT] Rust course homeworks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -13,6 +13,8 @@ jobs:
           toolchain: nightly
       - name: Create file
         run: touch report.xml
+      - name: ls
+        run: ls -la
       - name: Build and Run Tests
         run: cargo test -- -Z unstable-options --format junit --report-time
       - name: Publish Test Report
