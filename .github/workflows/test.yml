@@ -14,4 +14,4 @@ jobs:
       - name: Test Summary
         with:
           report_paths: results.xml
-      - run: cargo test -- -Z unstable-options --format json --report-time | cargo2junit > results.xml
+          run: cargo test -- -Z unstable-options --format json --report-time | cargo2junit > results.xml
