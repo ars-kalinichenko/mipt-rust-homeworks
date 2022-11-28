@@ -11,12 +11,6 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly
-      - name: Test PyTest test import
-        with:
-          check_name: Example Pytest Report
-          report_paths: test_results/python/report.xml
-          include_passed: true
-          detailed_summary: true
       - uses: actions-rs/cargo@v1
         with:
           command: test
