@@ -32,7 +32,7 @@ Rover relies on `.config.yml` that should be placed in the root of the problem t
 ```yml
 toolchain: stable
 allowed-patterns:
-  - src/lib.rs
+  - src/main
 steps:
   linters:
     - forbid-unsafe

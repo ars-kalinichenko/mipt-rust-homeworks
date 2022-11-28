@@ -39,7 +39,8 @@ macro_rules! launch {
         if cmd.status().context("command failed")?.success() {
             Ok(())
         } else {
-            bail!("command failed")
+            bail!("{:?}", cmd);
+            bail!("command failed [launch]")
         }
     }};
 }
@@ -130,10 +131,10 @@ impl Toolchain {
                     .arg("--features")
                     .arg("compilation-fail-generic")
                     .status()
-                    .context("command failed")?
+                    .context("command failed [133]")?
                     .success()
                 {
-                    bail!("command failed")
+                    bail!("command failed [136]")
                 }
                 if process::Command::new("cargo")
                     .current_dir(context.get_workdir())
@@ -141,10 +142,10 @@ impl Toolchain {
                     .arg("--features")
                     .arg("compilation-fail-labelled")
                     .status()
-                    .context("command failed")?
+                    .context("command failed [144]")?
                     .success()
                 {
-                    bail!("command failed")
+                    bail!("command failed [147]")
                 }
                 if process::Command::new("cargo")
                     .current_dir(context.get_workdir())
@@ -152,10 +153,10 @@ impl Toolchain {
                     .arg("--features")
                     .arg("compilation-fail-transmogrify")
                     .status()
-                    .context("command failed")?
+                    .context("command failed [155]")?
                     .success()
                 {
-                    bail!("command failed")
+                    bail!("command failed [158]")
                 }
                 println!("Compile tests passed, don't worry :)");
                 Ok(())
@@ -168,10 +169,10 @@ impl Toolchain {
                     .arg("--features")
                     .arg("test-lifetimes-create")
                     .status()
-                    .context("command failed")?
+                    .context("command failed [171]")?
                     .success()
                 {
-                    bail!("command failed")
+                    bail!("command failed [174]")
                 }
                 if process::Command::new("cargo")
                     .current_dir(context.get_workdir())
@@ -179,10 +180,10 @@ impl Toolchain {
                     .arg("--features")
                     .arg("test-lifetimes-get")
                     .status()
-                    .context("command failed")?
+                    .context("command failed [182]")?
                     .success()
                 {
-                    bail!("command failed")
+                    bail!("command failed [185]")
                 }
                 println!("Compile tests passed, don't worry :)");
                 Ok(())
@@ -195,10 +196,10 @@ impl Toolchain {
                     .arg("--features")
                     .arg("test-lifetime")
                     .status()
-                    .context("command failed")?
+                    .context("command failed [198]")?
                     .success()
                 {
-                    bail!("command failed")
+                    bail!("command failed [201]")
                 }
                 println!("Compile tests passed, don't worry :)");
                 Ok(())

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 pub const COMPOSE_CONFIG: &str = ".compose.yml";
 pub const PROBLEMS_FOLDER: &str = "problems";
 pub const SOLUTIONS_REPO_FOLDER: &str = "solutions";
-pub const REPOSITORY_NAMES: [&str; 2] = ["mipt-rust", "mipt-rust-private"];
+pub const REPOSITORY_NAMES: [&str; 3] = ["mipt-rust", "mipt-rust-private", "mipt-rust-homeworks"];
 
 pub struct Repository {
     path: PathBuf,

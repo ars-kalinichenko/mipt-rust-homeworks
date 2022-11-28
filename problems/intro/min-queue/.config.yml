@@ -1,6 +1,6 @@
 toolchain: stable
 allowed-patterns:
-  - src/lib.rs
+  - src/main
 steps:
   linters:
     - forbid-unsafe
