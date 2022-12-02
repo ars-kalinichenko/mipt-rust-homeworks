@@ -15,3 +15,6 @@ jobs:
         with:
           command: test
           args: -- -Z unstable-options --report-time
+      - uses: actions-rs/cargo@v1
+        with:
+          command: clippy

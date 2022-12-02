@@ -26,15 +26,14 @@ impl<T: Clone + Ord> MinQueue<T> {
                 Some(..) | None => { break; }
             }
         }
-        self.minimums.push_back(val.clone());
-
+        self.minimums.push_back(val);
     }
 
     pub fn pop(&mut self) -> Option<T> {
         if self.front() == self.minimums.front() {
             self.minimums.pop_front();
         }
-        return self.data.pop_front();
+        self.data.pop_front()
     }
 
     pub fn front(&self) -> Option<&T> {
