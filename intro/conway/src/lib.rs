@@ -96,7 +96,7 @@ impl GameOfLife {
                 }
             }
         }
-        return sum;
+        sum
     }
 
     pub fn step(&mut self) {
