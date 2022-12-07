@@ -87,11 +87,7 @@ fn third_rule() {
         vec![1, 1, 1],
         vec![0, 1, 0]
     ]);
-    let final_grid = get_grid(vec![
-        vec![1, 1, 1],
-        vec![1, 0, 1],
-        vec![1, 1, 1]
-    ]);
+    let final_grid = get_grid(vec![vec![1, 1, 1], vec![1, 0, 1], vec![1, 1, 1]]);
     let mut game = GameOfLife::from_grid(grid.clone());
     game.step();
     assert!(game.get_grid() == &final_grid);

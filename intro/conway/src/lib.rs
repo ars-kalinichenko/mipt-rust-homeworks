@@ -78,9 +78,7 @@ pub struct GameOfLife {
 
 impl GameOfLife {
     pub fn from_grid(grid: Grid<Cell>) -> Self {
-        Self {
-            grid
-        }
+        Self { grid }
     }
 
     pub fn get_grid(&self) -> &Grid<Cell> {
@@ -93,7 +91,9 @@ impl GameOfLife {
         for (row, col) in neighbours {
             match self.grid.get(row, col) {
                 Cell::Dead => (),
-                Cell::Alive => { sum += 1; }
+                Cell::Alive => {
+                    sum += 1;
+                }
             }
         }
         return sum;
@@ -106,9 +106,15 @@ impl GameOfLife {
                 let element = self.grid.get(row, col);
                 let sum = self.sum_of_neighbours(row, col);
                 match element {
-                    Cell::Dead if sum == 3 => { future_grid.set(Cell::Alive, row, col); }
-                    Cell::Alive if sum < 2 => { future_grid.set(Cell::Dead, row, col); }
-                    Cell::Alive if sum > 3 => { future_grid.set(Cell::Dead, row, col); }
+                    Cell::Dead if sum == 3 => {
+                        future_grid.set(Cell::Alive, row, col);
+                    }
+                    Cell::Alive if sum < 2 => {
+                        future_grid.set(Cell::Dead, row, col);
+                    }
+                    Cell::Alive if sum > 3 => {
+                        future_grid.set(Cell::Dead, row, col);
+                    }
                     Cell::Alive => (),
                     _ => {}
                 }

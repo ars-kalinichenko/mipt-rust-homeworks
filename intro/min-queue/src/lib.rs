@@ -2,7 +2,6 @@
 
 use std::collections::VecDeque;
 
-
 #[derive(Default)]
 pub struct MinQueue<T> {
     data: VecDeque<T>,
@@ -22,8 +21,12 @@ impl<T: Clone + Ord> MinQueue<T> {
         loop {
             let last_min = self.minimums.back();
             match last_min {
-                Some(minimum) if minimum > &val => { self.minimums.pop_back(); }
-                Some(..) | None => { break; }
+                Some(minimum) if minimum > &val => {
+                    self.minimums.pop_back();
+                }
+                Some(..) | None => {
+                    break;
+                }
             }
         }
         self.minimums.push_back(val);
