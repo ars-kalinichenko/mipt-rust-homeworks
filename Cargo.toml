@@ -2,5 +2,6 @@
 members = [
     # Problems
     "intro/combinations",
-    "intro/min-queue"
+    "intro/min-queue",
+    "intro/conway"
 ]
