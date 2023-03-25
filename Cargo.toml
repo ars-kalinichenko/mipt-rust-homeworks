@@ -3,5 +3,6 @@ members = [
     # Problems
     "intro/combinations",
     "intro/min-queue",
-    "intro/conway"
+    "intro/conway",
+    "borrowing/context"
 ]

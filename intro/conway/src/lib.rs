@@ -12,7 +12,7 @@ impl<T: Clone + Default> Grid<T> {
         Grid {
             rows,
             cols,
-            grid: Vec::new(),
+            grid: vec![T::default(); rows * cols],
         }
     }
 
@@ -29,7 +29,7 @@ impl<T: Clone + Default> Grid<T> {
     }
 
     pub fn get(&self, row: usize, col: usize) -> &T {
-        let index = row * self.size().1 + col;
+        let index = row * self.rows+ col;
         self.grid.get(index).unwrap()
     }
 
