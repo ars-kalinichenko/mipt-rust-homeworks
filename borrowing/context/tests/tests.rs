@@ -63,7 +63,7 @@ fn key() {
     assert_eq!(*cx.get_singleton::<i32>(), 372);
 
     let key = "foo".to_string();
-    cx.insert(key.clone().as_ref(), true);
+    cx.insert(key.as_ref(), true);
     assert_eq!(*cx.get::<bool>(&key), true);
 }
 

@@ -55,7 +55,7 @@ fn first_rule() {
         vec![0, 0, 0]
     ]);
     let final_grid = get_grid(vec![vec![0, 0, 0], vec![0, 0, 0], vec![0, 0, 0]]);
-    let mut game = GameOfLife::from_grid(grid.clone());
+    let mut game = GameOfLife::from_grid(grid);
     game.step();
     assert!(game.get_grid() == &final_grid);
 }
@@ -74,7 +74,7 @@ fn second_rule() {
         vec![0, 1, 0],
         vec![0, 0, 0]
     ]);
-    let mut game = GameOfLife::from_grid(grid.clone());
+    let mut game = GameOfLife::from_grid(grid);
     game.step();
     assert!(game.get_grid() == &final_grid);
 }
@@ -88,7 +88,7 @@ fn third_rule() {
         vec![0, 1, 0]
     ]);
     let final_grid = get_grid(vec![vec![1, 1, 1], vec![1, 0, 1], vec![1, 1, 1]]);
-    let mut game = GameOfLife::from_grid(grid.clone());
+    let mut game = GameOfLife::from_grid(grid);
     game.step();
     assert!(game.get_grid() == &final_grid);
 }
@@ -107,7 +107,7 @@ fn fourth_rule() {
         vec![0, 1, 0],
         vec![0, 1, 0]
     ]);
-    let mut game = GameOfLife::from_grid(grid.clone());
+    let mut game = GameOfLife::from_grid(grid);
     game.step();
     assert!(game.get_grid() == &final_grid);
 }
