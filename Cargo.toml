@@ -5,5 +5,5 @@ members = [
     "intro/min-queue",
     "intro/conway",
     "borrowing/context",
-    "borrowing/pstack"
+    "borrowing/pstack",
 ]

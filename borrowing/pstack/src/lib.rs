@@ -52,10 +52,7 @@ pub struct PStack<T> {
 
 impl<T> Default for PStack<T> {
     fn default() -> Self {
-        PStack {
-            head: None,
-            length: 0,
-        }
+        PStack::new()
     }
 }
 
